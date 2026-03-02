@@ -1972,7 +1972,12 @@ async function _seedData() {
                 { categorie: 'Documents et communication SSE',  item: 'Possession par le personnel de toutes les habilitations a jour necessaires a l\'intervention et visite medicale a jour' },
                 { categorie: 'Documents et communication SSE',  item: 'Connaissance de la demarche SSE (objectifs 0 ATAA, dernier 1/4h secu)' },
                 { categorie: 'Documents et communication SSE',  item: 'Connaissance des derniers evenements securite, flash info' },
-                { categorie: 'Documents et communication SSE',  item: 'Connaissance et prise en compte de l\'objectif annuel SSE de l\'audite' }
+                { categorie: 'Documents et communication SSE',  item: 'Connaissance et prise en compte de l\'objectif annuel SSE de l\'audite' },
+                { categorie: 'Rangement et proprete',           item: 'La zone de dechets est identifiee et propre / les dechets sont tries / absence de dechets au sol' },
+                { categorie: 'Comportement',                    item: 'Connaissance et preservation des zones a risques environnementaux du site (plan d\'eau, stockage a risque, canalisation...)' },
+                { categorie: 'Documents et communication SSE',  item: 'Connaissance des exigences environnementales de l\'entreprise sur chantier' },
+                { categorie: 'Documents et communication SSE',  item: 'Connaissance des situations d\'urgence et des bonnes pratiques de gestion (deversement accidentel, incendie, envol de dechets...)' },
+                { categorie: 'Documents et communication SSE',  item: 'Les incidents, accidents ou plaintes environnementales du client ou de tiers sont enregistrees et transmises au chef de chantier' }
             ]
         },
         {
@@ -4559,11 +4564,46 @@ const VmcFormPage = {
             </div>
         </div>
 
-        <!-- Observations -->
+        <!-- Remarques generales -->
         <div class="card mb-3">
-            <div class="card-header bg-white fw-bold">💬 Observations</div>
+            <div class="card-header bg-white fw-bold">💬 Remarques generales</div>
             <div class="card-body">
-                <textarea class="form-control" id="vmc-observations" rows="3" placeholder="Observations generales...">${vmc?.observations || ''}</textarea>
+                <div class="row">
+                    <div class="col-md-6 mb-2">
+                        <label class="form-label fw-semibold" for="vmc-points-amelioration">Points d'amelioration</label>
+                        <textarea class="form-control" id="vmc-points-amelioration" rows="3" placeholder="Points d'amelioration...">${vmc?.pointsAmelioration || vmc?.observations || ''}</textarea>
+                    </div>
+                    <div class="col-md-6 mb-2">
+                        <label class="form-label fw-semibold" for="vmc-bonnes-pratiques">Bonnes pratiques</label>
+                        <textarea class="form-control" id="vmc-bonnes-pratiques" rows="3" placeholder="Bonnes pratiques...">${vmc?.bonnesPratiques || ''}</textarea>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Actions a mettre en oeuvre -->
+        <div class="card mb-3">
+            <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center">
+                <span>📋 Actions a mettre en oeuvre</span>
+                <button type="button" class="btn btn-sm btn-outline-primary" id="btn-add-action-vmc">+ Ajouter</button>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-bordered table-sm mb-0" id="table-actions-vmc">
+                        <thead class="table-light">
+                            <tr>
+                                <th style="width:5%">N°</th>
+                                <th style="width:50%">Description</th>
+                                <th style="width:25%">Responsable</th>
+                                <th style="width:15%">Delai</th>
+                                <th style="width:5%"></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        ${this._renderActionsVmcRows(vmc)}
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
 
@@ -4631,6 +4671,7 @@ const VmcFormPage = {
         </div>`;
 
         this._renderGrille(grille);
+        this._initActionsVmc();
         this._initPhotos(vmc?.photos || []);
         this._initSignature(vmc?.signature);
         this._bindForm(isEdit, vmc, visite);
@@ -4685,6 +4726,76 @@ const VmcFormPage = {
             });
         });
         return template;
+    },
+
+    /* ================================================================
+       Actions VMC (formulaire)
+       ================================================================ */
+    _renderActionsVmcRows(vmc) {
+        const actions = vmc?.actionsVmc || [];
+        const count = Math.max(actions.length, 3); // minimum 3 lignes
+        let html = '';
+        for (let i = 0; i < count; i++) {
+            const a = actions[i] || {};
+            html += `<tr>
+                <td class="text-center align-middle">${i + 1}</td>
+                <td><input type="text" class="form-control form-control-sm action-vmc-desc" value="${this._escAttr(a.description || '')}" placeholder="Action..."></td>
+                <td><input type="text" class="form-control form-control-sm action-vmc-resp" value="${this._escAttr(a.responsable || '')}" placeholder="Responsable"></td>
+                <td><input type="date" class="form-control form-control-sm action-vmc-delai" value="${a.delai || ''}"></td>
+                <td class="text-center align-middle"><button type="button" class="btn btn-sm btn-outline-danger btn-remove-action-vmc" title="Supprimer">&times;</button></td>
+            </tr>`;
+        }
+        return html;
+    },
+
+    _escAttr(s) {
+        return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    },
+
+    _initActionsVmc() {
+        const tbody = document.querySelector('#table-actions-vmc tbody');
+        const btnAdd = document.getElementById('btn-add-action-vmc');
+
+        btnAdd.addEventListener('click', () => {
+            const rows = tbody.querySelectorAll('tr');
+            if (rows.length >= 5) {
+                showToast('Maximum 5 actions', 'warning');
+                return;
+            }
+            const n = rows.length + 1;
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td class="text-center align-middle">${n}</td>
+                <td><input type="text" class="form-control form-control-sm action-vmc-desc" placeholder="Action..."></td>
+                <td><input type="text" class="form-control form-control-sm action-vmc-resp" placeholder="Responsable"></td>
+                <td><input type="date" class="form-control form-control-sm action-vmc-delai"></td>
+                <td class="text-center align-middle"><button type="button" class="btn btn-sm btn-outline-danger btn-remove-action-vmc" title="Supprimer">&times;</button></td>`;
+            tbody.appendChild(tr);
+        });
+
+        tbody.addEventListener('click', (e) => {
+            if (e.target.classList.contains('btn-remove-action-vmc')) {
+                e.target.closest('tr').remove();
+                // Re-numero
+                tbody.querySelectorAll('tr').forEach((tr, i) => {
+                    tr.querySelector('td').textContent = i + 1;
+                });
+            }
+        });
+    },
+
+    _collectActionsVmc() {
+        const rows = document.querySelectorAll('#table-actions-vmc tbody tr');
+        const actions = [];
+        rows.forEach(tr => {
+            const desc = tr.querySelector('.action-vmc-desc')?.value.trim() || '';
+            const resp = tr.querySelector('.action-vmc-resp')?.value.trim() || '';
+            const delai = tr.querySelector('.action-vmc-delai')?.value || '';
+            if (desc || resp) {
+                actions.push({ description: desc, responsable: resp, delai });
+            }
+        });
+        return actions;
     },
 
     /* ================================================================
@@ -4903,6 +5014,24 @@ const VmcFormPage = {
                 await this._linkToPlanning(data, vmcId);
             }
 
+            // Creer les actions dans le plan d'actions
+            if (data.actionsVmc && data.actionsVmc.length) {
+                for (const action of data.actionsVmc) {
+                    if (action.description) {
+                        await DB.putAction({
+                            vmcId: vmcId,
+                            description: action.description,
+                            responsable: action.responsable,
+                            delai: action.delai || null,
+                            statut: 'A faire',
+                            commentaire: '',
+                            createdAt: new Date().toISOString(),
+                            updatedAt: new Date().toISOString()
+                        });
+                    }
+                }
+            }
+
             this._showConfirmation(data, vmcId);
 
             // Sauvegarder le PDF dans OneDrive pour envoi automatique (Power Automate)
@@ -4952,7 +5081,10 @@ const VmcFormPage = {
             scoreKo,
             scoreNc,
             grille,
-            observations:   document.getElementById('vmc-observations').value.trim(),
+            pointsAmelioration: document.getElementById('vmc-points-amelioration').value.trim(),
+            bonnesPratiques:    document.getElementById('vmc-bonnes-pratiques').value.trim(),
+            actionsVmc:         this._collectActionsVmc(),
+            observations:       document.getElementById('vmc-points-amelioration').value.trim(),
             photos:         this._photos.length ? [...this._photos] : [],
             signature,
             createdAt:      vmc?.createdAt || new Date().toISOString(),
@@ -5861,18 +5993,74 @@ const ImportExport = {
             y = doc.lastAutoTable.finalY + 4;
         }
 
-        // --- Observations (compact) ---
-        if (vmc.observations) {
+        // --- Remarques generales (deux colonnes) ---
+        const hasRemarks = vmc.pointsAmelioration || vmc.bonnesPratiques || vmc.observations;
+        if (hasRemarks) {
             doc.setFontSize(9);
             doc.setFont(undefined, 'bold');
-            doc.text('Observations', margin, y);
+            doc.text('Remarques generales', margin, y);
             y += 4;
+
+            const colW = (pageW - margin * 2 - 4) / 2;
             doc.setFontSize(7.5);
+            let leftH = 3.5, rightH = 3.5;
+
+            // Colonne gauche : Points d'amelioration
+            doc.setFont(undefined, 'bold');
+            doc.text("Points d'amelioration", margin, y);
             doc.setFont(undefined, 'normal');
-            const obsLines = doc.splitTextToSize(vmc.observations, pageW - margin * 2);
-            const maxObs = obsLines.slice(0, 4); // limiter a 4 lignes
-            doc.text(maxObs, margin, y);
-            y += maxObs.length * 3.2 + 3;
+            const ptAmel = vmc.pointsAmelioration || vmc.observations || '';
+            if (ptAmel) {
+                const lines1 = doc.splitTextToSize(ptAmel, colW);
+                doc.text(lines1.slice(0, 5), margin, y + 3.5);
+                leftH = Math.min(lines1.length, 5) * 3.2 + 3.5;
+            }
+
+            // Colonne droite : Bonnes pratiques
+            const rightX = margin + colW + 4;
+            doc.setFont(undefined, 'bold');
+            doc.text('Bonnes pratiques', rightX, y);
+            doc.setFont(undefined, 'normal');
+            const bp = vmc.bonnesPratiques || '';
+            if (bp) {
+                const lines2 = doc.splitTextToSize(bp, colW);
+                doc.text(lines2.slice(0, 5), rightX, y + 3.5);
+                rightH = Math.min(lines2.length, 5) * 3.2 + 3.5;
+            }
+
+            y += Math.max(leftH, rightH) + 3;
+        }
+
+        // --- Actions a mettre en oeuvre ---
+        if (vmc.actionsVmc && vmc.actionsVmc.length) {
+            doc.setFontSize(9);
+            doc.setFont(undefined, 'bold');
+            doc.text('Actions a mettre en oeuvre', margin, y);
+            y += 2;
+
+            const actHead = [['N\u00b0', 'Actions', 'Responsable', 'Delai']];
+            const actBody = vmc.actionsVmc.map((a, i) => [
+                String(i + 1),
+                a.description || '',
+                a.responsable || '',
+                a.delai ? this._fmtDatePDF(a.delai) : ''
+            ]);
+
+            doc.autoTable({
+                startY: y,
+                head: actHead,
+                body: actBody,
+                theme: 'grid',
+                styles: { fontSize: 7, cellPadding: 1.2 },
+                headStyles: { fillColor: [0, 105, 62], textColor: 255, fontStyle: 'bold', fontSize: 7 },
+                columnStyles: {
+                    0: { cellWidth: 8, halign: 'center' },
+                    3: { cellWidth: 22 }
+                },
+                margin: { left: margin, right: margin }
+            });
+
+            y = doc.lastAutoTable.finalY + 3;
         }
 
         // --- Signature (en bas de page 1) ---
@@ -6237,7 +6425,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 <!-- PWA : Service Worker + Version -->
 <script>
-window.VMC_BUILD = '2026-03-02 14:56';
+window.VMC_BUILD = '2026-03-02 16:29';
 console.log('VMC PWA Build:', window.VMC_BUILD);
 
 if ('serviceWorker' in navigator) {
@@ -6250,7 +6438,7 @@ if ('serviceWorker' in navigator) {
 document.addEventListener('DOMContentLoaded', () => {
     const v = document.createElement('div');
     v.style.cssText = 'position:fixed;bottom:2px;right:5px;font-size:10px;color:#aaa;z-index:1;pointer-events:none;';
-    v.textContent = 'PWA 2026-03-02 14:56';
+    v.textContent = 'PWA 2026-03-02 16:29';
     document.body.appendChild(v);
 });
 </script>

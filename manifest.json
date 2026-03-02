@@ -2,7 +2,7 @@
     "name": "Suivi VMC - Agriwatt",
     "short_name": "VMC",
     "description": "Visites Manageriales de Chantier - Agriwatt / ENRTEC",
-    "start_url": "./index.html",
+    "start_url": "./SuiviVMC.html",
     "display": "standalone",
     "orientation": "any",
     "background_color": "#f8f9fa",
