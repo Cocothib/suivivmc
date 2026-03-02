@@ -6235,13 +6235,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
 
-<!-- PWA : Service Worker -->
+<!-- PWA : Service Worker + Version -->
 <script>
+window.VMC_BUILD = '2026-03-02 14:46';
+console.log('VMC PWA Build:', window.VMC_BUILD);
+
 if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./sw.js')
         .then(reg => console.log('SW enregistre:', reg.scope))
         .catch(err => console.warn('SW erreur:', err));
 }
+
+// Indicateur de version visible (petit badge en bas a droite)
+document.addEventListener('DOMContentLoaded', () => {
+    const v = document.createElement('div');
+    v.style.cssText = 'position:fixed;bottom:2px;right:5px;font-size:10px;color:#aaa;z-index:1;pointer-events:none;';
+    v.textContent = 'PWA 2026-03-02 14:46';
+    document.body.appendChild(v);
+});
 </script>
 </body>
 </html>
