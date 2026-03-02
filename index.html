@@ -2060,8 +2060,9 @@ const DB = {
     /* --- Actions --- */
     async getActions(filters = {}) {
         let items = await db.actions.toArray();
-        if (filters.vmcId)  items = items.filter(a => a.vmcId === filters.vmcId);
-        if (filters.statut) items = items.filter(a => a.statut === filters.statut);
+        if (filters.vmcId)       items = items.filter(a => a.vmcId === filters.vmcId);
+        if (filters.statut)      items = items.filter(a => a.statut === filters.statut);
+        if (filters.responsable) items = items.filter(a => a.responsable === filters.responsable);
         items.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
         return items;
     },
@@ -5432,6 +5433,10 @@ const ActionsPage = {
         const vmcs = await DB.getVmcs();
         const vmcMap = Object.fromEntries(vmcs.map(v => [v.id, v]));
 
+        // Extraire les responsables uniques
+        const allActions = await DB.getActions();
+        const responsables = [...new Set(allActions.map(a => a.responsable).filter(Boolean))].sort();
+
         container.innerHTML = `
         <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
             <h4 class="mb-0">\u2705 Actions correctives</h4>
@@ -5458,6 +5463,13 @@ const ActionsPage = {
                             ${vmcs.map(v => `<option value="${v.id}">${v.conducteurNom} - ${this._fmtDate(v.date)}</option>`).join('')}
                         </select>
                     </div>
+                    <div class="col-auto">
+                        <label class="form-label small mb-0">Responsable</label>
+                        <select class="form-select form-select-sm" id="fa-responsable">
+                            <option value="">Tous</option>
+                            ${responsables.map(r => `<option value="${r}">${r}</option>`).join('')}
+                        </select>
+                    </div>
                 </div>
             </div>
         </div>
@@ -5468,7 +5480,7 @@ const ActionsPage = {
                 <div class="table-responsive">
                     <table class="table table-sm table-hover mb-0">
                         <thead><tr>
-                            <th>VMC / Observateur</th><th>Description</th><th>Responsable</th><th>Delai</th><th>Statut</th><th></th>
+                            <th>VMC / Observateur</th><th>Description</th><th>Responsable</th><th>Delai</th><th>Anciennete</th><th>Retard</th><th>Statut</th><th></th>
                         </tr></thead>
                         <tbody id="actions-body"></tbody>
                     </table>
@@ -5481,7 +5493,7 @@ const ActionsPage = {
         this._vmcs = vmcs;
         await this._applyFilters();
 
-        ['fa-statut', 'fa-vmc'].forEach(id => {
+        ['fa-statut', 'fa-vmc', 'fa-responsable'].forEach(id => {
             document.getElementById(id).onchange = () => this._applyFilters();
         });
 
@@ -5490,13 +5502,22 @@ const ActionsPage = {
 
     async _applyFilters() {
         const filters = {};
-        const statut = document.getElementById('fa-statut').value;
-        const vmcId  = document.getElementById('fa-vmc').value;
-        if (statut) filters.statut = statut;
-        if (vmcId)  filters.vmcId = Number(vmcId);
+        const statut      = document.getElementById('fa-statut').value;
+        const vmcId       = document.getElementById('fa-vmc').value;
+        const responsable = document.getElementById('fa-responsable').value;
+        if (statut)      filters.statut = statut;
+        if (vmcId)       filters.vmcId = Number(vmcId);
+        if (responsable) filters.responsable = responsable;
 
         const actions = await DB.getActions(filters);
         this._renderList(actions);
+    },
+
+    _daysBetween(dateA, dateB) {
+        if (!dateA || !dateB) return null;
+        const a = new Date(dateA);
+        const b = new Date(dateB);
+        return Math.floor((b - a) / 86400000);
     },
 
     _renderList(actions) {
@@ -5505,19 +5526,40 @@ const ActionsPage = {
         const today = new Date().toISOString().slice(0, 10);
 
         if (!actions.length) {
-            tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-3">Aucune action trouvee</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-3">Aucune action trouvee</td></tr>';
             document.getElementById('actions-count').textContent = '';
             return;
         }
 
         tbody.innerHTML = actions.map(a => {
             const vmc = this._vmcMap[a.vmcId];
+
+            // Anciennete : jours depuis la date VMC
+            const vmcDate = vmc?.date || null;
+            const refDate = a.statut === 'Soldee' && a.dateCloture ? a.dateCloture : today;
+            const ageDays = this._daysBetween(vmcDate, refDate);
+            const ageHtml = ageDays !== null ? `${ageDays}j` : '-';
+
+            // Retard : jours apres le delai (fige a la cloture)
+            let retardHtml = '-';
+            if (a.delai) {
+                const endDate = a.statut === 'Soldee' && a.dateCloture ? a.dateCloture : today;
+                const retard = this._daysBetween(a.delai, endDate);
+                if (retard > 0) {
+                    retardHtml = `<span class="text-danger fw-bold">+${retard}j</span>`;
+                } else {
+                    retardHtml = `<span class="text-success">${retard}j</span>`;
+                }
+            }
+
             const overdue = a.delai && a.delai < today && a.statut !== 'Soldee';
             return `<tr class="${overdue ? 'table-danger' : ''}">
                 <td>${vmc ? vmc.conducteurNom : '-'}</td>
                 <td class="text-truncate" style="max-width:250px">${a.description || ''}</td>
                 <td>${a.responsable || '-'}</td>
                 <td>${a.delai ? this._fmtDate(a.delai) : '-'} ${overdue ? '<span class="text-danger">\u26A0\uFE0F</span>' : ''}</td>
+                <td class="text-center">${ageHtml}</td>
+                <td class="text-center">${retardHtml}</td>
                 <td><span class="badge bg-${statutColors[a.statut] || 'secondary'}">${a.statut || '-'}</span></td>
                 <td>
                     <div class="btn-group btn-group-sm">
@@ -6425,7 +6467,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 <!-- PWA : Service Worker + Version -->
 <script>
-window.VMC_BUILD = '2026-03-02 16:29';
+window.VMC_BUILD = '2026-03-02 16:43';
 console.log('VMC PWA Build:', window.VMC_BUILD);
 
 if ('serviceWorker' in navigator) {
@@ -6438,7 +6480,7 @@ if ('serviceWorker' in navigator) {
 document.addEventListener('DOMContentLoaded', () => {
     const v = document.createElement('div');
     v.style.cssText = 'position:fixed;bottom:2px;right:5px;font-size:10px;color:#aaa;z-index:1;pointer-events:none;';
-    v.textContent = 'PWA 2026-03-02 16:29';
+    v.textContent = 'PWA 2026-03-02 16:43';
     document.body.appendChild(v);
 });
 </script>
