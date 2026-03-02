@@ -1948,6 +1948,13 @@ async function _seedData() {
             }
         },
         {
+            id: 'email_rappel_action',
+            value: {
+                sujet: 'Rappel action corrective - VMC du {date_vmc}',
+                corps: 'Bonjour {prenom},\n\nPour faire suite a la Visite Manageriale de Chantier du {date_vmc} ({site}), je vous rappelle l\'action suivante :\n\nAction : {description}\nResponsable : {responsable}\nDelai : {delai}\nStatut actuel : {statut}\n\nMerci de bien vouloir traiter cette action dans les meilleurs delais.\n\nCordialement'
+            }
+        },
+        {
             id: 'grille_types',
             value: [
                 { id: 'chantier', label: 'Chantier' },
@@ -3086,6 +3093,7 @@ const ConfigPage = {
         const conducteurs = await DB.getConducteurs();
         const emailTpl    = await DB.getConfig('email_template') || { sujet: '', corps: '' };
         const emailVmc    = await DB.getConfig('email_vmc') || { destinataire: '' };
+        const emailRappel = await DB.getConfig('email_rappel_action') || { sujet: 'Rappel action corrective - VMC du {date_vmc}', corps: 'Bonjour {prenom},\n\nPour faire suite a la Visite Manageriale de Chantier du {date_vmc} ({site}), je vous rappelle l\'action suivante :\n\nAction : {description}\nResponsable : {responsable}\nDelai : {delai}\nStatut actuel : {statut}\n\nMerci de bien vouloir traiter cette action dans les meilleurs delais.\n\nCordialement' };
 
         container.innerHTML = `
         <h4 class="mb-3">\u2699\uFE0F Parametres</h4>
@@ -3199,6 +3207,40 @@ const ConfigPage = {
                     </form>
                     <div id="email-preview" class="d-none mt-3">
                         <div class="card bg-light"><div class="card-body small" id="email-preview-content" style="white-space:pre-wrap;font-family:Calibri,Arial,sans-serif"></div></div>
+                    </div>
+                </div></div>
+
+                <div class="card mt-3"><div class="card-body">
+                    <h6 class="mb-2">\u{1F4E7} Modele de rappel d'action corrective</h6>
+                    <p class="text-muted small mb-3">Personnalisez le sujet et le corps de l'email envoye lors du rappel d'une action corrective depuis l'onglet Actions.</p>
+                    <div class="alert alert-light border small mb-3">
+                        <strong>Variables disponibles :</strong><br>
+                        <code>{prenom}</code> Prenom de l'observateur &bull;
+                        <code>{nom}</code> Nom complet &bull;
+                        <code>{date_vmc}</code> Date de la VMC &bull;
+                        <code>{site}</code> Site ou type de VMC &bull;
+                        <code>{description}</code> Description de l'action &bull;
+                        <code>{responsable}</code> Responsable de l'action &bull;
+                        <code>{delai}</code> Delai de l'action &bull;
+                        <code>{statut}</code> Statut actuel
+                    </div>
+                    <form id="form-email-rappel">
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Sujet</label>
+                            <input type="text" class="form-control" id="cfg-rappel-sujet" value="${emailRappel.sujet || ''}">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Corps du message</label>
+                            <textarea class="form-control" id="cfg-rappel-corps" rows="10" style="font-family:monospace;font-size:13px">${emailRappel.corps || ''}</textarea>
+                        </div>
+                        <div class="d-flex gap-2">
+                            <button type="submit" class="btn btn-primary">\u2714 Enregistrer</button>
+                            <button type="button" class="btn btn-outline-secondary" id="btn-reset-rappel-tpl">\u21BA Reinitialiser</button>
+                            <button type="button" class="btn btn-outline-info" id="btn-preview-rappel-tpl">\u{1F441}\uFE0F Apercu</button>
+                        </div>
+                    </form>
+                    <div id="rappel-preview" class="d-none mt-3">
+                        <div class="card bg-light"><div class="card-body small" id="rappel-preview-content" style="white-space:pre-wrap;font-family:Calibri,Arial,sans-serif"></div></div>
                     </div>
                 </div></div>
             </div>
@@ -3599,6 +3641,51 @@ const ConfigPage = {
             const el = document.getElementById('email-preview');
             el.classList.remove('d-none');
             document.getElementById('email-preview-content').textContent = preview;
+        };
+
+        // --- Rappel action corrective ---
+        const defaultRappel = {
+            sujet: 'Rappel action corrective - VMC du {date_vmc}',
+            corps: 'Bonjour {prenom},\n\nPour faire suite a la Visite Manageriale de Chantier du {date_vmc} ({site}), je vous rappelle l\'action suivante :\n\nAction : {description}\nResponsable : {responsable}\nDelai : {delai}\nStatut actuel : {statut}\n\nMerci de bien vouloir traiter cette action dans les meilleurs delais.\n\nCordialement'
+        };
+
+        document.getElementById('form-email-rappel').onsubmit = async e => {
+            e.preventDefault();
+            await DB.setConfig('email_rappel_action', {
+                sujet: document.getElementById('cfg-rappel-sujet').value,
+                corps: document.getElementById('cfg-rappel-corps').value
+            });
+            showToast('Modele de rappel enregistre');
+        };
+
+        document.getElementById('btn-reset-rappel-tpl').onclick = () => {
+            if (confirm('Reinitialiser le modele de rappel par defaut ?')) {
+                document.getElementById('cfg-rappel-sujet').value = defaultRappel.sujet;
+                document.getElementById('cfg-rappel-corps').value = defaultRappel.corps;
+                showToast('Modele reinitialise (non enregistre)', 'warning');
+            }
+        };
+
+        document.getElementById('btn-preview-rappel-tpl').onclick = () => {
+            const sujet = document.getElementById('cfg-rappel-sujet').value;
+            const corps = document.getElementById('cfg-rappel-corps').value;
+            const exemple = {
+                '{prenom}': 'Jean',
+                '{nom}': 'Jean DUPONT',
+                '{date_vmc}': '15/01/2026',
+                '{site}': 'Chantier Bordeaux',
+                '{description}': 'Mettre a jour le plan de prevention',
+                '{responsable}': 'Jean DUPONT',
+                '{delai}': '28/02/2026',
+                '{statut}': 'A faire'
+            };
+            let preview = `Sujet : ${sujet}\n${'─'.repeat(40)}\n${corps}`;
+            for (const [k, v] of Object.entries(exemple)) {
+                preview = preview.split(k).join(v);
+            }
+            const el = document.getElementById('rappel-preview');
+            el.classList.remove('d-none');
+            document.getElementById('rappel-preview-content').textContent = preview;
         };
     },
 
@@ -5614,23 +5701,28 @@ const ActionsPage = {
                 const cond = await DB.getConducteur(vmc.conducteurId);
                 if (!cond?.email) { showToast('Pas d\'email renseigne pour ' + (vmc.conducteurNom || 'cet observateur'), 'warning'); return; }
 
-                const delaiStr = action.delai ? this._fmtDate(action.delai) : 'non defini';
-                const vmcDate = this._fmtDate(vmc.date);
-                const sujet = `Rappel action corrective - VMC du ${vmcDate}`;
-                const corps = [
-                    `Bonjour ${cond.nom.split(' ')[0]},`,
-                    '',
-                    `Pour faire suite a la Visite Manageriale de Chantier du ${vmcDate} (${vmc.site || vmc.type}), je vous rappelle l'action suivante :`,
-                    '',
-                    `Action : ${action.description}`,
-                    `Responsable : ${action.responsable || '-'}`,
-                    `Delai : ${delaiStr}`,
-                    `Statut actuel : ${action.statut}`,
-                    '',
-                    'Merci de bien vouloir traiter cette action dans les meilleurs delais.',
-                    '',
-                    'Cordialement'
-                ].join('\n');
+                const tpl = await DB.getConfig('email_rappel_action') || {
+                    sujet: 'Rappel action corrective - VMC du {date_vmc}',
+                    corps: 'Bonjour {prenom},\n\nPour faire suite a la Visite Manageriale de Chantier du {date_vmc} ({site}), je vous rappelle l\'action suivante :\n\nAction : {description}\nResponsable : {responsable}\nDelai : {delai}\nStatut actuel : {statut}\n\nMerci de bien vouloir traiter cette action dans les meilleurs delais.\n\nCordialement'
+                };
+
+                const vars = {
+                    '{prenom}':      cond.nom.split(' ')[0],
+                    '{nom}':         cond.nom,
+                    '{date_vmc}':    this._fmtDate(vmc.date),
+                    '{site}':        vmc.site || vmc.type || '',
+                    '{description}': action.description || '',
+                    '{responsable}': action.responsable || '-',
+                    '{delai}':       action.delai ? this._fmtDate(action.delai) : 'non defini',
+                    '{statut}':      action.statut || ''
+                };
+
+                let sujet = tpl.sujet || '';
+                let corps = tpl.corps || '';
+                for (const [k, v] of Object.entries(vars)) {
+                    sujet = sujet.split(k).join(v);
+                    corps = corps.split(k).join(v);
+                }
 
                 window.open(`mailto:${encodeURIComponent(cond.email)}?subject=${encodeURIComponent(sujet)}&body=${encodeURIComponent(corps)}`);
             };
@@ -6499,7 +6591,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 <!-- PWA : Service Worker + Version -->
 <script>
-window.VMC_BUILD = '2026-03-02 16:50';
+window.VMC_BUILD = '2026-03-02 16:59';
 console.log('VMC PWA Build:', window.VMC_BUILD);
 
 if ('serviceWorker' in navigator) {
@@ -6512,7 +6604,7 @@ if ('serviceWorker' in navigator) {
 document.addEventListener('DOMContentLoaded', () => {
     const v = document.createElement('div');
     v.style.cssText = 'position:fixed;bottom:2px;right:5px;font-size:10px;color:#aaa;z-index:1;pointer-events:none;';
-    v.textContent = 'PWA 2026-03-02 16:50';
+    v.textContent = 'PWA 2026-03-02 16:59';
     document.body.appendChild(v);
 });
 </script>
