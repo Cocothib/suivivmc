@@ -2619,7 +2619,20 @@ const DataSync = {
     },
 
     async load() {
-        // Charger depuis les donnees embarquees dans le HTML (premier lancement)
+        // Verifier d'abord si IndexedDB a deja des donnees (session precedente)
+        const existingCount = await db.conducteurs.count() + await db.vmcs.count();
+        if (existingCount > 0) {
+            console.log('DataSync: IndexedDB contient deja des donnees (' + existingCount + ' enregistrements), skip embedded');
+            // Recuperer le meta depuis la config locale si disponible
+            const metaConfig = await db.config.get('_syncMeta');
+            if (metaConfig) {
+                this._loadedMeta = metaConfig.value;
+                this._lastSavedAt = metaConfig.value?.lastSaved || null;
+            }
+            return true;
+        }
+
+        // Premier lancement : charger depuis les donnees embarquees dans le HTML
         let data = this.loadEmbeddedData();
         if (!data && typeof SHARED_DATA !== 'undefined' && SHARED_DATA !== null) {
             data = SHARED_DATA;
@@ -2642,7 +2655,7 @@ const DataSync = {
             if (data.config?.length)      await db.config.bulkPut(data.config);
         });
 
-        console.log('DataSync: donnees embarquees chargees');
+        console.log('DataSync: premier lancement, donnees embarquees chargees');
         return true;
     },
 
@@ -2721,6 +2734,8 @@ const DataSync = {
             this._lastSavedAt = data._meta.lastSaved;
             this._dirty = false;
             this._updateBadge(false);
+            // Persister le meta dans IndexedDB pour que load() le retrouve
+            await db.config.put({ id: '_syncMeta', value: data._meta });
             console.log('DataSync: sauvegarde SharePoint OK (v' + data._meta.version + ')');
         } catch (e) {
             console.error('DataSync: erreur sauvegarde SharePoint', e);
