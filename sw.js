@@ -1,11 +1,12 @@
 /* =============================================================
    Service Worker – Suivi VMC PWA
    Strategie :
-   - App shell (HTML) : cache-first avec refresh en arriere-plan
+   - App shell (HTML) : network-first (toujours la derniere version)
+   - Fallback sur cache si hors-ligne
    - API Graph Microsoft : network-only (pas de cache API)
    ============================================================= */
 
-const CACHE_NAME = 'vmc-pwa-v1';
+const CACHE_NAME = 'vmc-pwa-v2';
 const APP_SHELL = ['./index.html', './manifest.json'];
 
 /* --- Installation : pre-cache du shell --- */
@@ -26,7 +27,7 @@ self.addEventListener('activate', (event) => {
     self.clients.claim();
 });
 
-/* --- Fetch : cache-first pour le shell, network-only pour Graph API --- */
+/* --- Fetch : network-first pour le shell, network-only pour Graph API --- */
 self.addEventListener('fetch', (event) => {
     const url = new URL(event.request.url);
 
@@ -37,18 +38,16 @@ self.addEventListener('fetch', (event) => {
         return; // laisser passer sans interception
     }
 
+    // Network-first : essayer le reseau, fallback sur cache
     event.respondWith(
-        caches.match(event.request).then((cached) => {
-            // Stale-while-revalidate : retourner le cache, puis mettre a jour
-            const networkFetch = fetch(event.request).then((response) => {
-                if (response && response.status === 200) {
-                    const clone = response.clone();
-                    caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-                }
-                return response;
-            }).catch(() => cached); // si offline, on a deja retourne le cache
-
-            return cached || networkFetch;
+        fetch(event.request).then((response) => {
+            if (response && response.status === 200) {
+                const clone = response.clone();
+                caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+            }
+            return response;
+        }).catch(() => {
+            return caches.match(event.request);
         })
     );
 });
