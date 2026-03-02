@@ -1,0 +1,19 @@
+{
+    "name": "Suivi VMC - Agriwatt",
+    "short_name": "VMC",
+    "description": "Visites Manageriales de Chantier - Agriwatt / ENRTEC",
+    "start_url": "./index.html",
+    "display": "standalone",
+    "orientation": "any",
+    "background_color": "#f8f9fa",
+    "theme_color": "#00693e",
+    "icons": [
+        {
+            "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='15' fill='%2300693e'/><text x='50' y='65' font-size='40' font-weight='bold' fill='white' text-anchor='middle' font-family='Arial'>VMC</text></svg>",
+            "sizes": "any",
+            "type": "image/svg+xml",
+            "purpose": "any"
+        }
+    ],
+    "categories": ["business", "productivity"]
+}
