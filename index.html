@@ -2871,13 +2871,13 @@ const DataSync = {
 
         if (state === 'connected') {
             btn.className = 'btn btn-sm btn-outline-light';
-            btn.innerHTML = '<i class="bi bi-cloud-check"></i> <span class="d-none d-md-inline">SharePoint</span>';
+            btn.innerHTML = '<i class="bi bi-cloud-check"></i> <span class="ms-1">SharePoint</span>';
             btn.title = 'Connecté à SharePoint — ' + (this.getUserName() || '');
             btn.onclick = null;
             if (btnSave) btnSave.style.display = '';
         } else if (state === 'need-permission') {
             btn.className = 'btn btn-sm btn-warning';
-            btn.innerHTML = '<i class="bi bi-shield-lock"></i> <span class="d-none d-md-inline">Autoriser</span>';
+            btn.innerHTML = '<i class="bi bi-shield-lock"></i> <span class="ms-1">Autoriser</span>';
             btn.onclick = async () => {
                 const ok = await this.requestPermission();
                 if (ok) this.updateConnectButton('connected');
@@ -2885,7 +2885,7 @@ const DataSync = {
             if (btnSave) btnSave.style.display = 'none';
         } else {
             btn.className = 'btn btn-sm btn-outline-warning';
-            btn.innerHTML = '<i class="bi bi-cloud-slash"></i> <span class="d-none d-md-inline">Connexion</span>';
+            btn.innerHTML = '<i class="bi bi-cloud-slash"></i> <span class="ms-1">Connexion</span>';
             btn.title = 'Se connecter a SharePoint';
             btn.onclick = async () => {
                 const ok = await this.connectFolder();
@@ -3959,7 +3959,7 @@ const PlanningPage = {
                     <option value="">Toutes agences</option>
                     ${agences.map(a => `<option value="${a}" ${this._filtreAgence === a ? 'selected' : ''}>${a}</option>`).join('')}
                 </select>
-                <button class="btn btn-outline-primary btn-sm" id="btn-bulk-ics" title="Générer les invitations annuelles">✉️ <span class="d-none d-sm-inline">Invitations</span></button>
+                <button class="btn btn-outline-primary btn-sm" id="btn-bulk-ics" title="Générer les invitations annuelles">✉️ <span class="ms-1">Invitations</span></button>
             </div>
         </div>
 
@@ -6716,10 +6716,10 @@ const App = {
         syncDiv.id = 'sync-buttons';
         syncDiv.innerHTML = `
             <button class="btn btn-outline-light btn-sm" id="btn-connect-folder" title="Connecter le dossier partage">
-                \u{1F517}<span class="d-none d-md-inline ms-1">Connecter</span>
+                \u{1F517}<span class="ms-1">Connecter</span>
             </button>
             <button class="btn btn-outline-light btn-sm" id="btn-save-data" title="Sauvegarder les données">
-                \u{1F4BE}<span class="d-none d-md-inline ms-1">Sauvegarder</span>
+                \u{1F4BE}<span class="ms-1">Sauvegarder</span>
                 <span class="badge bg-danger d-none" id="sync-badge">!</span>
             </button>
         `;
