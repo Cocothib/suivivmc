@@ -4974,7 +4974,7 @@ const VmcFormPage = {
         return new Promise((resolve) => {
             const img = new Image();
             img.onload = () => {
-                const maxW = 400;
+                const maxW = 800;
                 let w = img.width;
                 let h = img.height;
                 if (w > maxW) {
@@ -4988,7 +4988,7 @@ const VmcFormPage = {
                 ctx.fillStyle = '#ffffff';
                 ctx.fillRect(0, 0, w, h);
                 ctx.drawImage(img, 0, 0, w, h);
-                resolve(canvas.toDataURL('image/jpeg', 0.7));
+                resolve(canvas.toDataURL('image/png'));
             };
             img.onerror = () => resolve(dataUrl);
             img.src = dataUrl;
@@ -5050,8 +5050,14 @@ const VmcFormPage = {
         if (!canvas) return;
 
         const wrapper = canvas.parentElement;
-        canvas.width = wrapper.clientWidth;
-        canvas.height = canvas.clientHeight || 120;
+        const ratio = window.devicePixelRatio || 2;
+        const cssW = wrapper.clientWidth;
+        const cssH = 150;
+        canvas.width = cssW * ratio;
+        canvas.height = cssH * ratio;
+        canvas.style.width = cssW + 'px';
+        canvas.style.height = cssH + 'px';
+        canvas.getContext('2d').scale(ratio, ratio);
 
         this._signaturePad = new SignaturePad(canvas, {
             backgroundColor: 'rgb(255, 255, 255)',
@@ -5066,7 +5072,12 @@ const VmcFormPage = {
 
         window.addEventListener('resize', () => {
             const data = this._signaturePad.toDataURL();
-            canvas.width = wrapper.clientWidth;
+            const rW = wrapper.clientWidth;
+            canvas.width = rW * ratio;
+            canvas.height = cssH * ratio;
+            canvas.style.width = rW + 'px';
+            canvas.style.height = cssH + 'px';
+            canvas.getContext('2d').scale(ratio, ratio);
             this._signaturePad.fromDataURL(data);
         }, { once: false });
     },
@@ -6232,12 +6243,12 @@ const ImportExport = {
         // --- Signature (en bas de page 1) ---
         if (vmc.signature) {
             // Positionner la signature en bas de la page, au-dessus du pied de page
-            const sigH = 18;
-            const sigY = Math.max(y, pageH - 35);
+            const sigH = 25;
+            const sigY = Math.max(y, pageH - 40);
             doc.setFontSize(8);
             doc.setFont(undefined, 'bold');
             doc.text('Signature :', margin, sigY);
-            try { doc.addImage(vmc.signature, 'PNG', margin + 22, sigY - 4, 50, sigH); } catch(_) {}
+            try { doc.addImage(vmc.signature, 'PNG', margin + 22, sigY - 6, 65, sigH); } catch(_) {}
             y = sigY + sigH + 2;
         }
 
