@@ -5050,7 +5050,7 @@ const VmcFormPage = {
         if (!canvas) return;
 
         const wrapper = canvas.parentElement;
-        const ratio = window.devicePixelRatio || 2;
+        const ratio = Math.max(window.devicePixelRatio || 1, 3);
         const cssW = wrapper.clientWidth;
         const cssH = 150;
         canvas.width = cssW * ratio;
@@ -5062,8 +5062,9 @@ const VmcFormPage = {
         this._signaturePad = new SignaturePad(canvas, {
             backgroundColor: 'rgb(255, 255, 255)',
             penColor: 'rgb(0, 0, 0)',
-            minWidth: 1,
-            maxWidth: 3.5
+            minWidth: 0.8,
+            maxWidth: 2.2,
+            velocityFilterWeight: 0.7
         });
 
         if (existingData) {
@@ -5166,10 +5167,9 @@ const VmcFormPage = {
         const condOption = document.getElementById('vmc-conducteur').selectedOptions[0];
         const conducteurNom = condOption ? condOption.textContent.split(' (')[0] : '';
 
-        // Compresser la signature
-        const sigRaw = this._signaturePad && !this._signaturePad.isEmpty()
-            ? this._signaturePad.toDataURL() : (vmc?.signature || null);
-        const signature = await this._compressSignature(sigRaw);
+        // Signature : utiliser le PNG brut sans recompression pour garder la nettete
+        const signature = this._signaturePad && !this._signaturePad.isEmpty()
+            ? this._signaturePad.toDataURL('image/png') : (vmc?.signature || null);
 
         const data = {
             type:           document.getElementById('vmc-type').value,
