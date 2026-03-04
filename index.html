@@ -6083,6 +6083,7 @@ const ImportExport = {
         ];
         const infosRight = [
             ['Observateur', vmc.conducteurNom || cond?.nom || '-'],
+            ['Personne observée', vmc.observeNom || '-'],
             ['Agence', cond?.agence || '-']
         ];
 
@@ -6099,7 +6100,7 @@ const ImportExport = {
             doc.setFont(undefined, 'bold');
             doc.text(label + ' :', colR, yR);
             doc.setFont(undefined, 'normal');
-            doc.text(val, colR + 28, yR);
+            doc.text(val, colR + 38, yR);
             yR += 4;
         });
 
@@ -6109,7 +6110,7 @@ const ImportExport = {
         doc.setFont(undefined, 'bold');
         doc.text('Score :', colR, yR);
         doc.setFont(undefined, 'normal');
-        doc.text(`${vmc.scoreOk} OK / ${vmc.scoreKo} NOK - ${taux}%`, colR + 28, yR);
+        doc.text(`${vmc.scoreOk} OK / ${vmc.scoreKo} NOK - ${taux}%`, colR + 38, yR);
 
         y = Math.max(y, yR) + 4;
 
