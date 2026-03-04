@@ -974,6 +974,11 @@ body {
                         </a>
                     </li>
                     <li class="nav-item">
+                        <a class="nav-link" href="#remarques" data-page="remarques">
+                            &#x1F4DD; Remarques
+                        </a>
+                    </li>
+                    <li class="nav-item">
                         <a class="nav-link" href="#config" data-page="config">
                             &#x2699;&#xFE0F; Parametres
                         </a>
@@ -6443,6 +6448,209 @@ const ImportExport = {
 
 </script>
 
+<!-- js\remarques.js -->
+<script>
+/* =============================================================
+   remarques.js – Recapitulatif des remarques VMC
+   ============================================================= */
+const RemarquesPage = {
+
+    async render(container) {
+        const conducteurs = await DB.getConducteurs();
+        const condMap     = Object.fromEntries(conducteurs.map(c => [c.id, c]));
+        const agences     = [...new Set(conducteurs.map(c => c.agence))].sort();
+        const grilleTypes = await DB.getConfig('grille_types') || [
+            { id: 'chantier', label: 'Chantier' },
+            { id: 'vehicule', label: 'Vehicule' }
+        ];
+
+        this._condMap = condMap;
+
+        container.innerHTML = `
+        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+            <h4 class="mb-0">\u{1F4DD} Recapitulatif des Remarques</h4>
+            <button class="btn btn-success btn-sm" id="btn-export-remarques">\u{1F4E5} Export Excel</button>
+        </div>
+
+        <!-- Filtres -->
+        <div class="card mb-3">
+            <div class="card-body py-2">
+                <div class="row g-2 align-items-end">
+                    <div class="col-auto">
+                        <label class="form-label small mb-0">Observateur</label>
+                        <select class="form-select form-select-sm" id="rq-cond">
+                            <option value="">Tous</option>
+                            ${conducteurs.map(c => `<option value="${c.id}">${c.nom}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div class="col-auto">
+                        <label class="form-label small mb-0">Agence</label>
+                        <select class="form-select form-select-sm" id="rq-agence">
+                            <option value="">Toutes</option>
+                            ${agences.map(a => `<option value="${a}">${a}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div class="col-auto">
+                        <label class="form-label small mb-0">Type</label>
+                        <select class="form-select form-select-sm" id="rq-type">
+                            <option value="">Tous</option>
+                            ${grilleTypes.map(gt => `<option value="${gt.id}">${gt.label}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div class="col-auto">
+                        <label class="form-label small mb-0">Du</label>
+                        <input type="date" class="form-control form-control-sm" id="rq-date-from">
+                    </div>
+                    <div class="col-auto">
+                        <label class="form-label small mb-0">Au</label>
+                        <input type="date" class="form-control form-control-sm" id="rq-date-to">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tableau -->
+        <div class="card">
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-sm table-hover mb-0">
+                        <thead><tr>
+                            <th>Date</th><th>Observateur</th><th>Observe</th><th>Site</th><th>Type</th><th>Score</th><th>Points d'amelioration</th><th>Bonnes pratiques</th>
+                        </tr></thead>
+                        <tbody id="rq-list-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <div class="text-muted small mt-2" id="rq-count"></div>`;
+
+        await this._applyFilters();
+
+        ['rq-cond', 'rq-agence', 'rq-type', 'rq-date-from', 'rq-date-to'].forEach(id => {
+            document.getElementById(id).addEventListener('change', () => this._applyFilters());
+        });
+
+        document.getElementById('btn-export-remarques').onclick = () => this._exportExcel();
+    },
+
+    async _getFilteredVmcs() {
+        const filters = {};
+        const condId = document.getElementById('rq-cond').value;
+        const type   = document.getElementById('rq-type').value;
+        const agence = document.getElementById('rq-agence').value;
+        const dateFrom = document.getElementById('rq-date-from').value;
+        const dateTo   = document.getElementById('rq-date-to').value;
+        if (condId) filters.conducteurId = Number(condId);
+        if (type)   filters.type = type;
+
+        let vmcs = await DB.getVmcs(filters);
+
+        // Filtre agence
+        if (agence) {
+            vmcs = vmcs.filter(v => {
+                const c = this._condMap[v.conducteurId];
+                return c && c.agence === agence;
+            });
+        }
+
+        // Filtre dates
+        if (dateFrom) vmcs = vmcs.filter(v => v.date >= dateFrom);
+        if (dateTo)   vmcs = vmcs.filter(v => v.date <= dateTo);
+
+        // Ne garder que celles avec remarques
+        vmcs = vmcs.filter(v =>
+            (v.pointsAmelioration && v.pointsAmelioration.trim()) ||
+            (v.bonnesPratiques && v.bonnesPratiques.trim()) ||
+            (v.observations && v.observations.trim())
+        );
+
+        // Tri date decroissante
+        vmcs.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+        return vmcs;
+    },
+
+    async _applyFilters() {
+        const vmcs = await this._getFilteredVmcs();
+        this._renderList(vmcs);
+    },
+
+    _renderList(vmcs) {
+        const tbody = document.getElementById('rq-list-body');
+
+        if (!vmcs.length) {
+            tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-3">Aucune remarque trouvee</td></tr>';
+            document.getElementById('rq-count').textContent = '';
+            return;
+        }
+
+        tbody.innerHTML = vmcs.map(v => {
+            const cond = this._condMap[v.conducteurId];
+            const total = v.scoreOk + v.scoreKo;
+            const pct = total > 0 ? Math.round((v.scoreOk / total) * 100) : null;
+            const scoreHtml = pct !== null
+                ? `<div class="progress" style="height:16px;min-width:60px"><div class="progress-bar ${pct >= 80 ? 'bg-success' : pct >= 50 ? 'bg-warning' : 'bg-danger'}" style="width:${pct}%">${pct}%</div></div>`
+                : `<span class="text-muted small">${v.scoreOk} OK</span>`;
+            const ptAmel = v.pointsAmelioration || v.observations || '';
+            const bp = v.bonnesPratiques || '';
+            return `<tr>
+                <td>${this._fmtDate(v.date)}</td>
+                <td class="fw-bold">${v.conducteurNom || cond?.nom || '?'}</td>
+                <td>${v.observeNom || '-'}</td>
+                <td>${v.site || '-'}</td>
+                <td><span class="badge bg-secondary">${v.type || '-'}</span></td>
+                <td>${scoreHtml}</td>
+                <td style="white-space:pre-line;max-width:250px">${this._escHtml(ptAmel)}</td>
+                <td style="white-space:pre-line;max-width:250px">${this._escHtml(bp)}</td>
+            </tr>`;
+        }).join('');
+
+        document.getElementById('rq-count').textContent = `${vmcs.length} VMC(s) avec remarques`;
+    },
+
+    async _exportExcel() {
+        const vmcs = await this._getFilteredVmcs();
+        if (!vmcs.length) {
+            showToast('Aucune remarque a exporter', 'warning');
+            return;
+        }
+
+        const rows = vmcs.map(v => {
+            const cond = this._condMap[v.conducteurId];
+            return {
+                'Date':                   this._fmtDate(v.date),
+                'Observateur':            v.conducteurNom || cond?.nom || '',
+                'Observe':                v.observeNom || '',
+                'Site':                   v.site || '',
+                'Type':                   v.type || '',
+                'Score OK':               v.scoreOk,
+                'Score NOK':              v.scoreKo,
+                "Points d'amelioration":  v.pointsAmelioration || v.observations || '',
+                'Bonnes pratiques':        v.bonnesPratiques || ''
+            };
+        });
+
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Remarques');
+        const today = new Date().toISOString().slice(0, 10);
+        XLSX.writeFile(wb, `Remarques_VMC_${today}.xlsx`);
+        showToast('Export Excel termine');
+    },
+
+    _fmtDate(iso) {
+        if (!iso) return '-';
+        const [y, m, d] = iso.split('-');
+        return `${d}/${m}/${y}`;
+    },
+
+    _escHtml(str) {
+        if (!str) return '';
+        return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+};
+
+</script>
+
 <!-- js\app.js -->
 <script>
 /* =============================================================
@@ -6475,6 +6683,7 @@ const App = {
         'vmc-edit':  VmcFormPage,
         'vmc-list':  VmcListPage,
         'actions':   ActionsPage,
+        'remarques': RemarquesPage,
         'config':    ConfigPage
     },
 
