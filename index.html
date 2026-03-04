@@ -1903,7 +1903,8 @@ async function _seedData() {
         scoreNc:        0,
         grille:         [],
         observations:   '',
-        signature:      null,
+        signatureObservateur: null,
+        signatureObserve:     null,
         createdAt:      '2026-02-02T12:53:47.767Z'
     });
 
@@ -4719,15 +4720,32 @@ const VmcFormPage = {
             </div>
         </div>
 
-        <!-- Signature -->
-        <div class="card mb-3">
-            <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center">
-                <span>✒️ Signature</span>
-                <button type="button" class="btn btn-sm btn-outline-secondary" id="btn-clear-sig">Effacer</button>
+        <!-- Signatures -->
+        <div class="row g-2 mb-3">
+            <div class="col-6">
+                <div class="card h-100">
+                    <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center py-1">
+                        <span style="font-size:0.85rem">✒️ Signature observateur</span>
+                        <button type="button" class="btn btn-sm btn-outline-secondary py-0" id="btn-clear-sig-observateur">Effacer</button>
+                    </div>
+                    <div class="card-body p-2">
+                        <div class="signature-pad-wrapper">
+                            <canvas id="signature-canvas-observateur"></canvas>
+                        </div>
+                    </div>
+                </div>
             </div>
-            <div class="card-body">
-                <div class="signature-pad-wrapper">
-                    <canvas id="signature-canvas"></canvas>
+            <div class="col-6">
+                <div class="card h-100">
+                    <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center py-1">
+                        <span style="font-size:0.85rem">✒️ Signature observé</span>
+                        <button type="button" class="btn btn-sm btn-outline-secondary py-0" id="btn-clear-sig-observe">Effacer</button>
+                    </div>
+                    <div class="card-body p-2">
+                        <div class="signature-pad-wrapper">
+                            <canvas id="signature-canvas-observe"></canvas>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -4761,7 +4779,7 @@ const VmcFormPage = {
         this._renderGrille(grille);
         this._initActionsVmc();
         this._initPhotos(vmc?.photos || []);
-        this._initSignature(vmc?.signature);
+        this._initSignatures(vmc?.signatureObservateur || vmc?.signature, vmc?.signatureObserve);
         this._bindForm(isEdit, vmc, visite);
     },
 
@@ -5045,9 +5063,9 @@ const VmcFormPage = {
         new bootstrap.Modal(document.getElementById(id)).show();
     },
 
-    _initSignature(existingData) {
-        const canvas = document.getElementById('signature-canvas');
-        if (!canvas) return;
+    _setupSignaturePad(canvasId, btnId, existingData) {
+        const canvas = document.getElementById(canvasId);
+        if (!canvas) return null;
 
         const wrapper = canvas.parentElement;
         const ratio = Math.max(window.devicePixelRatio || 1, 3);
@@ -5059,7 +5077,7 @@ const VmcFormPage = {
         canvas.style.height = cssH + 'px';
         canvas.getContext('2d').scale(ratio, ratio);
 
-        this._signaturePad = new SignaturePad(canvas, {
+        const pad = new SignaturePad(canvas, {
             backgroundColor: 'rgb(255, 255, 255)',
             penColor: 'rgb(0, 0, 0)',
             minWidth: 0.8,
@@ -5068,21 +5086,28 @@ const VmcFormPage = {
         });
 
         if (existingData) {
-            this._signaturePad.fromDataURL(existingData, { ratio: 1 });
+            pad.fromDataURL(existingData, { ratio: 1 });
         }
 
-        document.getElementById('btn-clear-sig').onclick = () => this._signaturePad.clear();
+        document.getElementById(btnId).onclick = () => pad.clear();
 
         window.addEventListener('resize', () => {
-            const data = this._signaturePad.toDataURL();
+            const data = pad.toDataURL();
             const rW = wrapper.clientWidth;
             canvas.width = rW * ratio;
             canvas.height = cssH * ratio;
             canvas.style.width = rW + 'px';
             canvas.style.height = cssH + 'px';
             canvas.getContext('2d').scale(ratio, ratio);
-            this._signaturePad.fromDataURL(data, { ratio: 1 });
+            pad.fromDataURL(data, { ratio: 1 });
         }, { once: false });
+
+        return pad;
+    },
+
+    _initSignatures(existingObservateur, existingObserve) {
+        this._signaturePadObservateur = this._setupSignaturePad('signature-canvas-observateur', 'btn-clear-sig-observateur', existingObservateur);
+        this._signaturePadObserve = this._setupSignaturePad('signature-canvas-observe', 'btn-clear-sig-observe', existingObserve);
     },
 
     _bindForm(isEdit, vmc, visite) {
@@ -5167,9 +5192,11 @@ const VmcFormPage = {
         const condOption = document.getElementById('vmc-conducteur').selectedOptions[0];
         const conducteurNom = condOption ? condOption.textContent.split(' (')[0] : '';
 
-        // Signature : utiliser le PNG brut sans recompression pour garder la nettete
-        const signature = this._signaturePad && !this._signaturePad.isEmpty()
-            ? this._signaturePad.toDataURL('image/png') : (vmc?.signature || null);
+        // Signatures observateur et observé
+        const signatureObservateur = this._signaturePadObservateur && !this._signaturePadObservateur.isEmpty()
+            ? this._signaturePadObservateur.toDataURL('image/png') : (vmc?.signatureObservateur || vmc?.signature || null);
+        const signatureObserve = this._signaturePadObserve && !this._signaturePadObserve.isEmpty()
+            ? this._signaturePadObserve.toDataURL('image/png') : (vmc?.signatureObserve || null);
 
         const data = {
             type:           document.getElementById('vmc-type').value,
@@ -5187,7 +5214,8 @@ const VmcFormPage = {
             actionsVmc:         this._collectActionsVmc(),
             observations:       document.getElementById('vmc-points-amelioration').value.trim(),
             photos:         this._photos.length ? [...this._photos] : [],
-            signature,
+            signatureObservateur,
+            signatureObserve,
             createdAt:      vmc?.createdAt || new Date().toISOString(),
             updatedAt:      new Date().toISOString()
         };
@@ -6004,7 +6032,8 @@ const ImportExport = {
                         scoreNc:       parseInt(row['score_nc']) || 0,
                         grille:        [],
                         observations:  '',
-                        signature:     null,
+                        signatureObservateur: null,
+                        signatureObserve:    null,
                         createdAt:     (row['created_at'] || new Date().toISOString()).toString()
                     });
                     importedVmcs++;
@@ -6273,15 +6302,24 @@ const ImportExport = {
             y += photoH + 4;
         }
 
-        // --- Signature ---
-        if (vmc.signature) {
+        // --- Signatures (rétro-compatible avec ancien champ signature) ---
+        const sigObservateur = vmc.signatureObservateur || vmc.signature;
+        const sigObserve = vmc.signatureObserve;
+        if (sigObservateur || sigObserve) {
             const sigH = 30;
-            if (y + sigH + 5 > pageH - 20) { doc.addPage(); y = 20; }
+            if (y + sigH + 10 > pageH - 20) { doc.addPage(); y = 20; }
             doc.setFontSize(8);
             doc.setFont(undefined, 'bold');
-            doc.text('Signature :', margin, y);
-            try { doc.addImage(vmc.signature, 'PNG', margin + 22, y - 6, 70, sigH); } catch(_) {}
-            y += sigH + 2;
+            const colW = (pageW - 2 * margin) / 2;
+            if (sigObservateur) {
+                doc.text('Signature observateur :', margin, y);
+                try { doc.addImage(sigObservateur, 'PNG', margin, y + 2, Math.min(70, colW - 5), sigH); } catch(_) {}
+            }
+            if (sigObserve) {
+                doc.text('Signature observé :', margin + colW, y);
+                try { doc.addImage(sigObserve, 'PNG', margin + colW, y + 2, Math.min(70, colW - 5), sigH); } catch(_) {}
+            }
+            y += sigH + 6;
         }
 
         // --- Pied de page ---
