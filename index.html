@@ -4974,7 +4974,7 @@ const VmcFormPage = {
         return new Promise((resolve) => {
             const img = new Image();
             img.onload = () => {
-                const maxW = 800;
+                const maxW = 1500;
                 let w = img.width;
                 let h = img.height;
                 if (w > maxW) {
@@ -5061,11 +5061,13 @@ const VmcFormPage = {
 
         this._signaturePad = new SignaturePad(canvas, {
             backgroundColor: 'rgb(255, 255, 255)',
-            penColor: 'rgb(0, 0, 0)'
+            penColor: 'rgb(0, 0, 0)',
+            minWidth: 1,
+            maxWidth: 3.5
         });
 
         if (existingData) {
-            this._signaturePad.fromDataURL(existingData);
+            this._signaturePad.fromDataURL(existingData, { ratio: 1 });
         }
 
         document.getElementById('btn-clear-sig').onclick = () => this._signaturePad.clear();
@@ -5078,7 +5080,7 @@ const VmcFormPage = {
             canvas.style.width = rW + 'px';
             canvas.style.height = cssH + 'px';
             canvas.getContext('2d').scale(ratio, ratio);
-            this._signaturePad.fromDataURL(data);
+            this._signaturePad.fromDataURL(data, { ratio: 1 });
         }, { once: false });
     },
 
@@ -6243,12 +6245,12 @@ const ImportExport = {
         // --- Signature (en bas de page 1) ---
         if (vmc.signature) {
             // Positionner la signature en bas de la page, au-dessus du pied de page
-            const sigH = 25;
-            const sigY = Math.max(y, pageH - 40);
+            const sigH = 30;
+            const sigY = Math.max(y, pageH - 45);
             doc.setFontSize(8);
             doc.setFont(undefined, 'bold');
             doc.text('Signature :', margin, sigY);
-            try { doc.addImage(vmc.signature, 'PNG', margin + 22, sigY - 6, 65, sigH); } catch(_) {}
+            try { doc.addImage(vmc.signature, 'PNG', margin + 22, sigY - 6, 70, sigH); } catch(_) {}
             y = sigY + sigH + 2;
         }
 
