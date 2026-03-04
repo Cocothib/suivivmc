@@ -2404,6 +2404,9 @@ const VMC_CONFIG = {
 let _msalInstance = null;
 let _msalAccount  = null;
 
+/* Detecter mobile : popups bloquees → utiliser redirect */
+const _isMobile = /Android|iPhone|iPad|iPod|Opera Mini|IEMobile/i.test(navigator.userAgent);
+
 async function _initMSAL() {
     if (_msalInstance) return _msalInstance;
     const config = {
@@ -2420,10 +2423,12 @@ async function _initMSAL() {
     _msalInstance = new msal.PublicClientApplication(config);
     await _msalInstance.initialize();
 
-    // Gerer le retour de redirection
+    // Gerer le retour de redirection (mobile)
     const resp = await _msalInstance.handleRedirectPromise();
     if (resp) {
         _msalAccount = resp.account;
+        // Marquer qu'on revient d'un login redirect (pour finaliser la connexion)
+        _msalInstance._fromRedirect = true;
     } else {
         const accounts = _msalInstance.getAllAccounts();
         if (accounts.length > 0) _msalAccount = accounts[0];
@@ -2443,6 +2448,10 @@ async function _getToken() {
     } catch (e) {
         // Token expire → redemander interactivement
         if (e instanceof msal.InteractionRequiredAuthError) {
+            if (_isMobile) {
+                await _msalInstance.acquireTokenRedirect({ scopes: VMC_CONFIG.SCOPES });
+                return null; // redirect en cours
+            }
             const resp = await _msalInstance.acquireTokenPopup({ scopes: VMC_CONFIG.SCOPES });
             _msalAccount = resp.account;
             return resp.accessToken;
@@ -2732,10 +2741,17 @@ const DataSync = {
                 const loaded = await this._loadFromRemote();
                 if (loaded) {
                     console.log('DataSync: connexion automatique + donnees synchronisees');
+                } else if (_msalInstance._fromRedirect) {
+                    // Retour de login redirect mobile → sauvegarder les donnees locales
+                    console.log('DataSync: retour redirect mobile → sauvegarde initiale');
+                    await this.save();
                 } else {
                     console.log('DataSync: connexion automatique (pas de donnees distantes)');
                 }
                 this.registerPresence();
+                if (_msalInstance._fromRedirect) {
+                    showToast('Connecté à SharePoint — ' + (_msalAccount.name || 'utilisateur'));
+                }
                 return 'connected';
             }
             return 'no-handle'; // pas de compte → afficher le bouton connexion
@@ -2747,9 +2763,15 @@ const DataSync = {
 
     async connectFolder() {
         // "connectFolder" dans la version originale = showDirectoryPicker
-        // Ici = login interactif MSAL
+        // Ici = login interactif MSAL (redirect sur mobile, popup sur desktop)
         try {
             await _initMSAL();
+            if (_isMobile) {
+                // Sur mobile, les popups sont bloquees → redirect
+                await _msalInstance.loginRedirect({ scopes: VMC_CONFIG.SCOPES });
+                // Le navigateur redirige → le retour est gere par handleRedirectPromise dans _initMSAL
+                return false; // ne revient pas ici immediatement
+            }
             const resp = await _msalInstance.loginPopup({ scopes: VMC_CONFIG.SCOPES });
             _msalAccount = resp.account;
             this._connected = true;
