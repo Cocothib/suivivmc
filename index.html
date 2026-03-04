@@ -1875,61 +1875,6 @@ async function _seedData() {
     }));
     await db.visites.bulkAdd(visitesToAdd);
 
-    // Marquer les visites realisees (janvier 2026)
-    const visitesAkim = await db.visites.where({ conducteurId: 151, mois: 1, annee: 2026 }).toArray();
-    if (visitesAkim.length) {
-        await db.visites.update(visitesAkim[0].id, {
-            dateRealisee: '2026-01-21',
-            statut: 'realise'
-        });
-    }
-
-    const visitesGreg = await db.visites.where({ conducteurId: 161, mois: 1, annee: 2026 }).toArray();
-    let gregVisiteId = null;
-    if (visitesGreg.length) {
-        gregVisiteId = visitesGreg[0].id;
-        await db.visites.update(gregVisiteId, {
-            dateRealisee: '2026-01-27',
-            statut: 'realise'
-        });
-    }
-
-    // VMC existante
-    const vmcId = await db.vmcs.add({
-        type:           'chantier',
-        date:           '2026-01-27',
-        site:           'test',
-        visiteAgw:      'Thib',
-        visiteurAgw:    'Gregoire',
-        conducteurId:   161,
-        conducteurNom:  'Gregoire DE CHILLAZ',
-        scoreOk:        22,
-        scoreKo:        0,
-        scoreNc:        0,
-        grille:         [],
-        observations:   '',
-        signatureObservateur: null,
-        signatureObserve:     null,
-        createdAt:      '2026-02-02T12:53:47.767Z'
-    });
-
-    if (gregVisiteId) {
-        await db.visites.update(gregVisiteId, { vmcId: vmcId });
-    }
-
-    // Action existante
-    await db.actions.add({
-        vmcId:          vmcId,
-        description:    'revoir le rangement',
-        responsable:    'Thib',
-        delai:          '2026-02-27',
-        statut:         'A faire',
-        dateCloture:    null,
-        commentaire:    '',
-        createdAt:      '2026-02-02T12:53:47.771Z',
-        updatedAt:      '2026-02-02T12:53:47.771Z'
-    });
-
     // Config par defaut
     await db.config.bulkPut([
         {
