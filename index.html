@@ -807,9 +807,9 @@ body {
         height: 80px !important;
     }
 
-    /* Toast positioned above thumb zone */
+    /* Toast positioned above bottom nav */
     .toast-container {
-        bottom: 60px !important;
+        bottom: 70px !important;
     }
 
     .toast {
@@ -835,6 +835,109 @@ body {
 
     .planning-cell {
         min-width: 48px;
+    }
+}
+
+/* ---- Mobile Bottom Navigation ---- */
+.mobile-bottom-nav {
+    display: none;
+}
+
+@media (max-width: 768px) {
+    .mobile-bottom-nav {
+        display: flex;
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: #fff;
+        border-top: 1px solid #dee2e6;
+        box-shadow: 0 -2px 10px rgba(0,0,0,0.06);
+        z-index: 1030;
+        padding-bottom: env(safe-area-inset-bottom, 0);
+    }
+
+    .bottom-nav-item {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 6px 0 4px;
+        text-decoration: none !important;
+        color: #6c757d;
+        font-size: 0.62rem;
+        transition: color 0.15s;
+        min-height: 52px;
+        -webkit-tap-highlight-color: transparent;
+    }
+
+    .bottom-nav-item.active {
+        color: var(--agw-green);
+    }
+
+    .bottom-nav-icon {
+        font-size: 1.2rem;
+        line-height: 1;
+        margin-bottom: 2px;
+    }
+
+    .bottom-nav-label {
+        font-weight: 500;
+        letter-spacing: 0.2px;
+    }
+
+    /* Center FAB button */
+    .bottom-nav-fab .bottom-nav-fab-btn {
+        width: 50px;
+        height: 50px;
+        border-radius: 50%;
+        background: var(--agw-yellow, #ffc107);
+        color: var(--agw-green-dark, #004d2e);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.5rem;
+        font-weight: 700;
+        margin-top: -18px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        border: 3px solid #fff;
+        transition: transform 0.15s;
+    }
+
+    .bottom-nav-fab:active .bottom-nav-fab-btn {
+        transform: scale(0.92);
+    }
+
+    .bottom-nav-fab.active .bottom-nav-fab-btn {
+        opacity: 0.65;
+    }
+
+    .bottom-nav-fab .bottom-nav-label {
+        margin-top: -2px;
+    }
+
+    /* Hide top yellow button on mobile (replaced by bottom nav FAB) */
+    #btn-nav-new-vmc {
+        display: none !important;
+    }
+
+    /* Hide nav items duplicated in bottom bar */
+    .navbar-nav [data-page="dashboard"],
+    .navbar-nav [data-page="vmc-list"],
+    .navbar-nav [data-page="planning"],
+    .navbar-nav [data-page="actions"] {
+        display: none !important;
+    }
+
+    /* Add bottom padding to main content */
+    main#app-content {
+        padding-bottom: 65px !important;
+    }
+
+    /* Toast above bottom nav */
+    .toast-container {
+        bottom: 70px !important;
     }
 }
 
@@ -997,6 +1100,30 @@ body {
             <p class="mt-2 text-muted">Chargement de l'application...</p>
         </div>
     </main>
+
+    <!-- Mobile bottom navigation -->
+    <nav class="mobile-bottom-nav" id="mobile-nav">
+        <a href="#dashboard" class="bottom-nav-item" data-page="dashboard">
+            <span class="bottom-nav-icon">&#x1F4CA;</span>
+            <span class="bottom-nav-label">Tableau</span>
+        </a>
+        <a href="#vmc-list" class="bottom-nav-item" data-page="vmc-list">
+            <span class="bottom-nav-icon">&#x1F4CB;</span>
+            <span class="bottom-nav-label">Liste</span>
+        </a>
+        <a href="#vmc-new" class="bottom-nav-item bottom-nav-fab" data-page="vmc-new">
+            <div class="bottom-nav-fab-btn">&#x2795;</div>
+            <span class="bottom-nav-label">VMC</span>
+        </a>
+        <a href="#planning" class="bottom-nav-item" data-page="planning">
+            <span class="bottom-nav-icon">&#x1F4C5;</span>
+            <span class="bottom-nav-label">Planning</span>
+        </a>
+        <a href="#actions" class="bottom-nav-item" data-page="actions">
+            <span class="bottom-nav-icon">&#x2705;</span>
+            <span class="bottom-nav-label">Actions</span>
+        </a>
+    </nav>
 
     <!-- Toast container for notifications -->
     <div class="toast-container position-fixed bottom-0 end-0 p-3" id="toast-container"></div>
@@ -6724,6 +6851,14 @@ const App = {
         if (btnNewVmc) {
             btnNewVmc.classList.toggle('active-page', page === 'vmc-new');
         }
+
+        // MAJ bottom nav active
+        document.querySelectorAll('.bottom-nav-item[data-page]').forEach(item => {
+            item.classList.toggle('active', item.dataset.page === page);
+        });
+
+        // Scroll to top on navigation
+        window.scrollTo(0, 0);
     },
 
     async _initSyncUI() {
