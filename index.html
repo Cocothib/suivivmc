@@ -6242,46 +6242,46 @@ const ImportExport = {
             y = doc.lastAutoTable.finalY + 3;
         }
 
-        // --- Signature (en bas de page 1) ---
-        if (vmc.signature) {
-            // Positionner la signature en bas de la page, au-dessus du pied de page
-            const sigH = 30;
-            const sigY = Math.max(y, pageH - 45);
-            doc.setFontSize(8);
-            doc.setFont(undefined, 'bold');
-            doc.text('Signature :', margin, sigY);
-            try { doc.addImage(vmc.signature, 'PNG', margin + 22, sigY - 6, 70, sigH); } catch(_) {}
-            y = sigY + sigH + 2;
-        }
-
-        // --- Photos (page 2 si presentes) ---
+        // --- Photos (juste apres les actions) ---
         if (vmc.photos && vmc.photos.length) {
-            doc.addPage();
-            let yP = 15;
-            doc.setFontSize(11);
-            doc.setFont(undefined, 'bold');
-            doc.text(`Photos terrain (${vmc.photos.length})`, margin, yP);
-            yP += 6;
-
             const photoW = 55;
             const photoH = 40;
-            let x = margin;
 
+            // Titre
+            if (y + photoH + 10 > pageH - 20) { doc.addPage(); y = 20; }
+            doc.setFontSize(9);
+            doc.setFont(undefined, 'bold');
+            doc.text(`Photos terrain (${vmc.photos.length})`, margin, y);
+            y += 5;
+
+            let x = margin;
             for (const photo of vmc.photos) {
                 if (x + photoW > pageW - margin) {
                     x = margin;
-                    yP += photoH + 4;
+                    y += photoH + 4;
                 }
-                if (yP + photoH > 270) {
+                if (y + photoH > pageH - 20) {
                     doc.addPage();
-                    yP = 20;
+                    y = 20;
                     x = margin;
                 }
                 try {
-                    doc.addImage(photo.data, 'JPEG', x, yP, photoW, photoH);
+                    doc.addImage(photo.data, 'JPEG', x, y, photoW, photoH);
                 } catch (_) {}
                 x += photoW + 4;
             }
+            y += photoH + 4;
+        }
+
+        // --- Signature ---
+        if (vmc.signature) {
+            const sigH = 30;
+            if (y + sigH + 5 > pageH - 20) { doc.addPage(); y = 20; }
+            doc.setFontSize(8);
+            doc.setFont(undefined, 'bold');
+            doc.text('Signature :', margin, y);
+            try { doc.addImage(vmc.signature, 'PNG', margin + 22, y - 6, 70, sigH); } catch(_) {}
+            y += sigH + 2;
         }
 
         // --- Pied de page ---
