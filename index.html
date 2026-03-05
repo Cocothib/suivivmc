@@ -3867,7 +3867,7 @@ const DashboardPage = {
         const nbPlanifiees = visites.filter(v => v.statut === 'planifie' && !v.annulee).length;
         const today = now.toISOString().slice(0, 10);
         const nbRetard = visites.filter(v => v.statut === 'planifie' && !v.annulee && v.datePrevue < today).length;
-        const actionsOuvertes = actions.filter(a => a.statut !== 'Soldee' && a.statut !== 'fermee').length;
+        const actionsOuvertes = actions.filter(a => a.statut === 'A faire' || a.statut === 'En cours').length;
 
         const totalPrevues = visites.filter(v => !v.annulee).length;
         const tauxConf = totalPrevues > 0 ? Math.round((nbRealisees / totalPrevues) * 100) : 0;
@@ -4044,7 +4044,7 @@ const DashboardPage = {
     },
 
     _renderActionsRecentes(actions, vmcs, conducteurs) {
-        const ouvertes = actions.filter(a => a.statut !== 'Soldee' && a.statut !== 'fermee').slice(0, 8);
+        const ouvertes = actions.filter(a => a.statut === 'A faire' || a.statut === 'En cours').slice(0, 8);
         const vmcMap = Object.fromEntries(vmcs.map(v => [v.id, v]));
         const tbody = document.querySelector('#table-actions-recentes tbody');
         if (!ouvertes.length) {
