@@ -2035,14 +2035,14 @@ async function _seedData() {
             id: 'email_template',
             value: {
                 sujet: 'VMC - Planning des visites {annee}',
-                corps: 'Bonjour {prenom},\n\nVeuillez trouver ci-joint le planning de vos Visites Manageriales de Chantier (VMC) pour l\'annee {annee}.\n\nDates prevues :\n{dates}\n\nPour ajouter ces dates a votre calendrier, ouvrez le fichier {fichier} en piece jointe.\n\nCordialement,\n{entreprise}'
+                corps: 'Bonjour {prenom},\n\nVeuillez trouver ci-joint le planning de vos Visites Managériales de Chantier (VMC) pour l\'année {annee}.\n\nDates prévues :\n{dates}\n\nPour ajouter ces dates à votre calendrier, ouvrez le fichier {fichier} en pièce jointe.\n\nCordialement,\n{entreprise}'
             }
         },
         {
             id: 'email_rappel_action',
             value: {
                 sujet: 'Rappel action corrective - VMC du {date_vmc}',
-                corps: 'Bonjour {prenom},\n\nPour faire suite a la Visite Manageriale de Chantier du {date_vmc} ({site}), je vous rappelle l\'action suivante :\n\nAction : {description}\nResponsable : {responsable}\nDelai : {delai}\nStatut actuel : {statut}\n\nMerci de bien vouloir traiter cette action dans les meilleurs delais.\n\nCordialement'
+                corps: 'Bonjour {prenom},\n\nPour faire suite à la Visite Managériale de Chantier du {date_vmc} ({site}), je vous rappelle l\'action suivante :\n\nAction : {description}\nResponsable : {responsable}\nDélai : {delai}\nStatut actuel : {statut}\n\nMerci de bien vouloir traiter cette action dans les meilleurs délais.\n\nCordialement'
             }
         },
         {
@@ -2055,48 +2055,48 @@ async function _seedData() {
         {
             id: 'grille_template_chantier',
             value: [
-                { categorie: 'Rangement et proprete',           item: 'Rangement du materiel, pas d\'obstacles au sol, proprete du chantier' },
-                { categorie: 'Rangement et proprete',           item: 'Balisage de la zone de travail - Presence visuelle - Identification de la zone de travail' },
-                { categorie: 'Rangement et proprete',           item: 'Local technique (proprete, rangement), cheminement cable AC/DC, champs solaire' },
+                { categorie: 'Rangement et propreté',           item: 'Rangement du matériel, pas d\'obstacles au sol, propreté du chantier' },
+                { categorie: 'Rangement et propreté',           item: 'Balisage de la zone de travail - Présence visuelle - Identification de la zone de travail' },
+                { categorie: 'Rangement et propreté',           item: 'Local technique (propreté, rangement), cheminement câble AC/DC, champs solaire' },
                 { categorie: 'Comportement',                    item: 'Port des EPI obligatoires lors de l\'intervention' },
-                { categorie: 'Comportement',                    item: 'Citation des 3 principaux risques lies a leur metier et des moyens de preventions/points de vigilance' },
-                { categorie: 'Comportement',                    item: 'Connaissance et respect des consignes de sécurité liees au site (n\u00b0 d\'urgence, circulation, consignes d\'evacuation, interlocuteurs privilegies...)' },
-                { categorie: 'Comportement',                    item: 'Connaissance et respect de la procedure de consignation (5 etapes : Separation / Condamnation / Identification / VAT / MALT CC)' },
-                { categorie: 'Comportement',                    item: 'Possession et connaissance des fiches methodes' },
+                { categorie: 'Comportement',                    item: 'Citation des 3 principaux risques liés à leur métier et des moyens de prévention/points de vigilance' },
+                { categorie: 'Comportement',                    item: 'Connaissance et respect des consignes de sécurité liées au site (n° d\'urgence, circulation, consignes d\'évacuation, interlocuteurs privilégiés...)' },
+                { categorie: 'Comportement',                    item: 'Connaissance et respect de la procédure de consignation (5 étapes : Séparation / Condamnation / Identification / VAT / MALT CC)' },
+                { categorie: 'Comportement',                    item: 'Possession et connaissance des fiches méthodes' },
                 { categorie: 'Comportement',                    item: 'Connaissance des possibilités de ne pas effectuer la totalité de la mission quand les conditions de sécurité ne sont pas réunies = droit de retrait' },
-                { categorie: 'Comportement',                    item: 'Utilisation des moyens de manutentions adaptes disponibles' },
-                { categorie: 'Comportement',                    item: 'Filet gouttiere, filet en rive, ancrage faitage, filet sous toiture, ligne de vie' },
-                { categorie: 'Documents et communication SSE',  item: 'Prise de connaissance et validation d\'un Plan de Prevention ponctuel/annuel et analyse de risque' },
-                { categorie: 'Documents et communication SSE',  item: 'Possession par le personnel de toutes les habilitations a jour necessaires a l\'intervention et visite medicale a jour' },
+                { categorie: 'Comportement',                    item: 'Utilisation des moyens de manutentions adaptés disponibles' },
+                { categorie: 'Comportement',                    item: 'Filet gouttière, filet en rive, ancrage faîtage, filet sous toiture, ligne de vie' },
+                { categorie: 'Documents et communication SSE',  item: 'Prise de connaissance et validation d\'un Plan de Prévention ponctuel/annuel et analyse de risque' },
+                { categorie: 'Documents et communication SSE',  item: 'Possession par le personnel de toutes les habilitations à jour nécessaires à l\'intervention et visite médicale à jour' },
                 { categorie: 'Documents et communication SSE',  item: 'Connaissance de la démarche SSE (objectifs 0 ATAA, dernier 1/4h sécu)' },
                 { categorie: 'Documents et communication SSE',  item: 'Connaissance des derniers événements sécurité, flash info' },
-                { categorie: 'Documents et communication SSE',  item: 'Connaissance et prise en compte de l\'objectif annuel SSE de l\'audite' },
-                { categorie: 'Rangement et proprete',           item: 'La zone de dechets est identifiee et propre / les dechets sont tries / absence de dechets au sol' },
-                { categorie: 'Comportement',                    item: 'Connaissance et preservation des zones a risques environnementaux du site (plan d\'eau, stockage a risque, canalisation...)' },
+                { categorie: 'Documents et communication SSE',  item: 'Connaissance et prise en compte de l\'objectif annuel SSE de l\'audité' },
+                { categorie: 'Rangement et propreté',           item: 'La zone de déchets est identifiée et propre / les déchets sont triés / absence de déchets au sol' },
+                { categorie: 'Comportement',                    item: 'Connaissance et préservation des zones à risques environnementaux du site (plan d\'eau, stockage à risque, canalisation...)' },
                 { categorie: 'Documents et communication SSE',  item: 'Connaissance des exigences environnementales de l\'entreprise sur chantier' },
-                { categorie: 'Documents et communication SSE',  item: 'Connaissance des situations d\'urgence et des bonnes pratiques de gestion (deversement accidentel, incendie, envol de dechets...)' },
-                { categorie: 'Documents et communication SSE',  item: 'Les incidents, accidents ou plaintes environnementales du client ou de tiers sont enregistrees et transmises au chef de chantier' }
+                { categorie: 'Documents et communication SSE',  item: 'Connaissance des situations d\'urgence et des bonnes pratiques de gestion (déversement accidentel, incendie, envol de déchets...)' },
+                { categorie: 'Documents et communication SSE',  item: 'Les incidents, accidents ou plaintes environnementales du client ou de tiers sont enregistrées et transmises au chef de chantier' }
             ]
         },
         {
             id: 'grille_template_vehicule',
             value: [
-                { categorie: 'Véhicule',           item: 'Presence d\'une assurance, revision a jour et contrôle technique' },
-                { categorie: 'Véhicule',           item: 'Gilet propre et triangle dans l\'habitacle du vehicule' },
+                { categorie: 'Véhicule',           item: 'Présence d\'une assurance, révision à jour et contrôle technique' },
+                { categorie: 'Véhicule',           item: 'Gilet propre et triangle dans l\'habitacle du véhicule' },
                 { categorie: 'État général',       item: 'Propreté intérieure et extérieure' },
                 { categorie: 'État général',       item: 'Rangement du véhicule' },
                 { categorie: 'État général',       item: 'État du véhicule : pneumatiques, rétroviseurs, vitres...' },
-                { categorie: 'Presence des EPI',   item: 'Chaussures - Vetements de travail' },
-                { categorie: 'Presence des EPI',   item: 'Lunettes - Protections auditives - Gants anti coupures - Casque' },
-                { categorie: 'Presence des EPI',   item: 'Kit travail en hauteur : harnais, longes, cordes, stop chutes, asap lock, mousquetons, cordelette, sac de sable, catapulte' },
-                { categorie: 'Presence des EPI',   item: 'Kit Consignation Electrique : VAT - Casque et visiere - etiquettes - Cadenas (x2) - condamnateurs - Tapis - Gants electriques' },
-                { categorie: 'Outillage',          item: 'Caisse a outils : multimetre, materiel en bon etat, ni tordu ni denude' },
-                { categorie: 'Outillage',          item: 'Outils a main sur batterie (perceuse, perfo, meuleuse, etc.)' },
-                { categorie: 'Outillage',          item: 'Ordinateur portable + chargeur en bon etat' },
-                { categorie: 'Outillage',          item: 'Echelles en bon etat et arrimees' },
-                { categorie: 'Outillage',          item: 'Extincteur CO2 verifie et conforme' },
-                { categorie: 'Outillage',          item: 'Cones de balisage, chaine et/ou rubalise' },
-                { categorie: 'Outillage',          item: 'Trousse a pharmacie et kit hygiene present et complet' }
+                { categorie: 'Présence des EPI',   item: 'Chaussures - Vêtements de travail' },
+                { categorie: 'Présence des EPI',   item: 'Lunettes - Protections auditives - Gants anti coupures - Casque' },
+                { categorie: 'Présence des EPI',   item: 'Kit travail en hauteur : harnais, longes, cordes, stop chutes, asap lock, mousquetons, cordelette, sac de sable, catapulte' },
+                { categorie: 'Présence des EPI',   item: 'Kit Consignation Électrique : VAT - Casque et visière - étiquettes - Cadenas (x2) - condamnateurs - Tapis - Gants électriques' },
+                { categorie: 'Outillage',          item: 'Caisse à outils : multimètre, matériel en bon état, ni tordu ni dénudé' },
+                { categorie: 'Outillage',          item: 'Outils à main sur batterie (perceuse, perfo, meuleuse, etc.)' },
+                { categorie: 'Outillage',          item: 'Ordinateur portable + chargeur en bon état' },
+                { categorie: 'Outillage',          item: 'Échelles en bon état et arrimées' },
+                { categorie: 'Outillage',          item: 'Extincteur CO2 vérifié et conforme' },
+                { categorie: 'Outillage',          item: 'Cônes de balisage, chaîne et/ou rubalise' },
+                { categorie: 'Outillage',          item: 'Trousse à pharmacie et kit hygiène présent et complet' }
             ]
         }
     ]);
@@ -3134,7 +3134,7 @@ const DataSync = {
         bar.innerHTML = `
             <div class="alert alert-warning alert-dismissible d-flex align-items-center m-2" role="alert">
                 <i class="bi bi-shield-lock me-2 fs-5"></i>
-                <div class="flex-grow-1">Session expiree — cliquez pour vous reconnecter a SharePoint.</div>
+                <div class="flex-grow-1">Session expirée — cliquez pour vous reconnecter à SharePoint.</div>
                 <button class="btn btn-sm btn-warning ms-2" id="btn-reauth">Se reconnecter</button>
                 <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
             </div>`;
@@ -3215,7 +3215,7 @@ const ConfigPage = {
         const conducteurs = await DB.getConducteurs();
         const emailTpl    = await DB.getConfig('email_template') || { sujet: '', corps: '' };
         const emailVmc    = await DB.getConfig('email_vmc') || { destinataire: '' };
-        const emailRappel = await DB.getConfig('email_rappel_action') || { sujet: 'Rappel action corrective - VMC du {date_vmc}', corps: 'Bonjour {prenom},\n\nPour faire suite a la Visite Manageriale de Chantier du {date_vmc} ({site}), je vous rappelle l\'action suivante :\n\nAction : {description}\nResponsable : {responsable}\nDelai : {delai}\nStatut actuel : {statut}\n\nMerci de bien vouloir traiter cette action dans les meilleurs delais.\n\nCordialement' };
+        const emailRappel = await DB.getConfig('email_rappel_action') || { sujet: 'Rappel action corrective - VMC du {date_vmc}', corps: 'Bonjour {prenom},\n\nPour faire suite à la Visite Managériale de Chantier du {date_vmc} ({site}), je vous rappelle l\'action suivante :\n\nAction : {description}\nResponsable : {responsable}\nDélai : {delai}\nStatut actuel : {statut}\n\nMerci de bien vouloir traiter cette action dans les meilleurs délais.\n\nCordialement' };
 
         container.innerHTML = `
         <h4 class="mb-3">\u2699\uFE0F Paramètres</h4>
@@ -3288,7 +3288,7 @@ const ConfigPage = {
                 <!-- Notification email lors de l'enregistrement VMC -->
                 <div class="card mb-3"><div class="card-body">
                     <h6 class="mb-2">\u{1F4E7} Notification email automatique (VMC)</h6>
-                    <p class="text-muted small mb-3">Quand une VMC est enregistrée, le PDF est automatiquement sauvegardé dans le dossier <code>PDF_envois/</code> avec un fichier de metadonnees JSON. Un flux <strong>Power Automate</strong> peut surveiller ce dossier et envoyer l'email automatiquement.</p>
+                    <p class="text-muted small mb-3">Quand une VMC est enregistrée, le PDF est automatiquement sauvegardé dans le dossier <code>PDF_envois/</code> avec un fichier de métadonnées JSON. Un flux <strong>Power Automate</strong> peut surveiller ce dossier et envoyer l'email automatiquement.</p>
                     <form id="form-email-vmc">
                         <div class="mb-3">
                             <label class="form-label fw-bold">Destinataire(s) supplementaire(s)</label>
@@ -3307,7 +3307,7 @@ const ConfigPage = {
                         <code>{prenom}</code> Prenom de l'observateur &bull;
                         <code>{nom}</code> Nom complet &bull;
                         <code>{annee}</code> Annee du planning &bull;
-                        <code>{dates}</code> Liste des dates prevues &bull;
+                        <code>{dates}</code> Liste des dates prévues &bull;
                         <code>{fichier}</code> Nom du fichier ICS &bull;
                         <code>{entreprise}</code> Nom de l'entreprise
                     </div>
@@ -3435,7 +3435,7 @@ const ConfigPage = {
                 adresse:   document.getElementById('cfg-ent-adresse').value.trim()
             });
             await DataSync.save();
-            showToast('Informations entreprise enregistrees');
+            showToast('Informations entreprise enregistrées');
         };
     },
 
@@ -3446,7 +3446,7 @@ const ConfigPage = {
             <tr>
                 <td>${c.id}</td>
                 <td>${c.nom || ''}</td>
-                <td>${c.email ? `<span class="text-muted small">${c.email}</span>` : '<span class="text-muted small fst-italic">non renseigne</span>'}</td>
+                <td>${c.email ? `<span class="text-muted small">${c.email}</span>` : '<span class="text-muted small fst-italic">non renseigné</span>'}</td>
                 <td>${c.agence || ''}</td>
                 <td>
                     <button class="btn btn-sm btn-outline-primary btn-edit-cond" data-id="${c.id}">\u270E</button>
@@ -3465,7 +3465,7 @@ const ConfigPage = {
             b.onclick = async () => {
                 if (confirm('Supprimer cet observateur ?')) {
                     await DB.deleteConducteur(Number(b.dataset.id));
-                    showToast('Observateur supprime', 'warning');
+                    showToast('Observateur supprimé', 'warning');
                     ConfigPage.render(document.getElementById('app-content'));
                 }
             };
@@ -3517,7 +3517,7 @@ const ConfigPage = {
             if (!data.nom || !data.id) return;
             await DB.putConducteur(data);
             modal.hide();
-            showToast(isEdit ? 'Observateur modifie' : 'Observateur ajoute');
+            showToast(isEdit ? 'Observateur modifié' : 'Observateur ajouté');
             ConfigPage.render(document.getElementById('app-content'));
         };
     },
@@ -3648,7 +3648,7 @@ const ConfigPage = {
             await DB.setConfig(`grille_template_${typeId}`, []);
             await DataSync.save();
             modal.hide();
-            showToast(`Type "${label}" ajoute et sauvegarde`);
+            showToast(`Type "${label}" ajouté et sauvegardé`);
             ConfigPage.render(document.getElementById('app-content'));
             setTimeout(() => {
                 const tab = document.querySelector('[href="#tab-grille"]');
@@ -3715,7 +3715,7 @@ const ConfigPage = {
     _bindEmailTemplate(current) {
         const defaultTpl = {
             sujet: 'VMC - Planning des visites {annee}',
-            corps: 'Bonjour {prenom},\n\nVeuillez trouver ci-joint le planning de vos Visites Manageriales de Chantier (VMC) pour l\'annee {annee}.\n\nDates prevues :\n{dates}\n\nPour ajouter ces dates a votre calendrier, ouvrez le fichier {fichier} en piece jointe.\n\nCordialement,\n{entreprise}'
+            corps: 'Bonjour {prenom},\n\nVeuillez trouver ci-joint le planning de vos Visites Managériales de Chantier (VMC) pour l\'année {annee}.\n\nDates prévues :\n{dates}\n\nPour ajouter ces dates à votre calendrier, ouvrez le fichier {fichier} en pièce jointe.\n\nCordialement,\n{entreprise}'
         };
 
         document.getElementById('form-email-vmc').onsubmit = async e => {
@@ -3725,7 +3725,7 @@ const ConfigPage = {
             });
             DataSync.markDirty();
             await DataSync.save();
-            showToast('Destinataire(s) email VMC enregistre(s)');
+            showToast('Destinataire(s) email VMC enregistré(s)');
         };
 
         document.getElementById('form-email-tpl').onsubmit = async e => {
@@ -3768,7 +3768,7 @@ const ConfigPage = {
         // --- Rappel action corrective ---
         const defaultRappel = {
             sujet: 'Rappel action corrective - VMC du {date_vmc}',
-            corps: 'Bonjour {prenom},\n\nPour faire suite a la Visite Manageriale de Chantier du {date_vmc} ({site}), je vous rappelle l\'action suivante :\n\nAction : {description}\nResponsable : {responsable}\nDelai : {delai}\nStatut actuel : {statut}\n\nMerci de bien vouloir traiter cette action dans les meilleurs delais.\n\nCordialement'
+            corps: 'Bonjour {prenom},\n\nPour faire suite à la Visite Managériale de Chantier du {date_vmc} ({site}), je vous rappelle l\'action suivante :\n\nAction : {description}\nResponsable : {responsable}\nDélai : {delai}\nStatut actuel : {statut}\n\nMerci de bien vouloir traiter cette action dans les meilleurs délais.\n\nCordialement'
         };
 
         document.getElementById('form-email-rappel').onsubmit = async e => {
@@ -3827,14 +3827,14 @@ const ConfigPage = {
             statusEl.innerHTML = `<span class="text-success">\u2705 Connecté</span> — dossier : <strong>${folder}</strong><br>
                 <span class="text-muted">Dernière sauvegarde : ${lastSaved} (v${version})</span>`;
         } else {
-            statusEl.innerHTML = '<span class="text-danger">\u274C Non connecte</span> — cliquez "Reconnecter" pour selectionner le dossier';
+            statusEl.innerHTML = '<span class="text-danger">\u274C Non connecté</span> — cliquez "Reconnecter" pour sélectionner le dossier';
         }
 
         document.getElementById('btn-save-username').onclick = () => {
             const name = nameInput.value.trim();
             if (name) {
                 DataSync.setUserName(name);
-                showToast('Nom enregistre : ' + name);
+                showToast('Nom enregistré : ' + name);
             }
         };
 
@@ -4043,7 +4043,7 @@ const DashboardPage = {
 
         const tbody = document.querySelector('#table-prochaines tbody');
         if (!prochaines.length) {
-            tbody.innerHTML = '<tr><td colspan="4" class="text-muted text-center">Aucune visite a venir</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="4" class="text-muted text-center">Aucune visite à venir</td></tr>';
             return;
         }
         tbody.innerHTML = prochaines.map(v => {
@@ -4051,7 +4051,7 @@ const DashboardPage = {
             const isLate = v.datePrevue < today;
             const badge = isLate
                 ? '<span class="badge bg-danger">En retard</span>'
-                : '<span class="badge bg-warning text-dark">Planifie</span>';
+                : '<span class="badge bg-warning text-dark">Planifié</span>';
             return `<tr style="cursor:pointer" data-cid="${v.conducteurId}" class="row-visite">
                 <td class="fw-bold">${cond?.nom || v.conducteurNom || '?'}</td>
                 <td>${cond?.agence || ''}</td>
@@ -4136,10 +4136,10 @@ const PlanningPage = {
 
         <!-- Legende -->
         <div class="mb-2 small">
-            <span class="legend-box cell-realise-bg"></span>Realise
-            <span class="legend-box cell-planifie-bg ms-2"></span>Planifie
+            <span class="legend-box cell-realise-bg"></span>Réalisé
+            <span class="legend-box cell-planifie-bg ms-2"></span>Planifié
             <span class="legend-box cell-retard-bg ms-2"></span>En retard
-            <span class="legend-box cell-annulee-bg ms-2"></span>Annule
+            <span class="legend-box cell-annulee-bg ms-2"></span>Annulé
         </div>
 
         ${filtered.length === 0
@@ -4265,7 +4265,7 @@ const PlanningPage = {
                 annulee:       false,
                 vmcId:         null
             });
-            showToast('Visite planifiee');
+            showToast('Visite planifiée');
             this.render(document.getElementById('app-content'));
         }
     },
@@ -4325,7 +4325,7 @@ const PlanningPage = {
             const adjusted = nextJourOuvre(newDate);
             await DB.putVisite({ ...visite, datePrevue: adjusted });
             modal.hide();
-            showToast('Date modifiee');
+            showToast('Date modifiée');
             this.render(document.getElementById('app-content'));
         };
 
@@ -4378,8 +4378,8 @@ const PlanningPage = {
             </div>
             <div class="modal-body">
                 ${lignes.length === 0
-                    ? '<p class="text-muted">Aucune visite planifiee pour cette annee.</p>'
-                    : `<p class="small text-muted mb-3">Un email (.eml) sera généré pour chaque observateur avec le planning annuel en piece jointe (.ics). Double-cliquez le fichier .eml pour l'ouvrir dans Outlook, puis cliquez Envoyer.</p>
+                    ? '<p class="text-muted">Aucune visite planifiée pour cette année.</p>'
+                    : `<p class="small text-muted mb-3">Un email (.eml) sera généré pour chaque observateur avec le planning annuel en pièce jointe (.ics). Double-cliquez le fichier .eml pour l'ouvrir dans Outlook, puis cliquez Envoyer.</p>
                 <div class="table-responsive">
                     <table class="table table-sm table-hover mb-0">
                         <thead><tr><th>Observateur</th><th>Agence</th><th class="text-center">Visites</th><th class="text-center">Email</th><th></th></tr></thead>
@@ -4522,7 +4522,7 @@ const PlanningPage = {
 
         // Appliquer le template (ou fallback)
         const defaultSubject = `VMC - Planning des visites ${this._annee}`;
-        const defaultBody = `Bonjour {prenom},\n\nVeuillez trouver ci-joint le planning de vos Visites Manageriales de Chantier (VMC) pour l'annee {annee}.\n\nDates prevues :\n{dates}\n\nPour ajouter ces dates a votre calendrier, ouvrez le fichier {fichier} en piece jointe.\n\nCordialement,\n{entreprise}`;
+        const defaultBody = `Bonjour {prenom},\n\nVeuillez trouver ci-joint le planning de vos Visites Managériales de Chantier (VMC) pour l'année {annee}.\n\nDates prévues :\n{dates}\n\nPour ajouter ces dates à votre calendrier, ouvrez le fichier {fichier} en pièce jointe.\n\nCordialement,\n{entreprise}`;
 
         const tplSubject = (emailTpl && emailTpl.sujet) || defaultSubject;
         const tplBody = (emailTpl && emailTpl.corps) || defaultBody;
@@ -4627,7 +4627,7 @@ const PlanningPage = {
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        showToast('Invitation generee pour ' + cond.nom);
+        showToast('Invitation générée pour ' + cond.nom);
     },
 
     _generateIcs(visite, cond, entreprise) {
@@ -4738,7 +4738,7 @@ const VmcFormPage = {
                         <div class="mb-2">
                             <label class="form-label">Observateur *</label>
                             <select class="form-select" id="vmc-conducteur" required>
-                                <option value="" ${!selectedConducteurId ? 'selected' : ''}>-- Selectionner --</option>
+                                <option value="" ${!selectedConducteurId ? 'selected' : ''}>-- Sélectionner --</option>
                                 ${conducteurs.map(c => `<option value="${c.id}" ${Number(c.id) === Number(selectedConducteurId) && selectedConducteurId ? 'selected' : ''}>${c.nom} (${c.agence})</option>`).join('')}
                             </select>
                         </div>
@@ -4765,7 +4765,7 @@ const VmcFormPage = {
                     <div class="card-body p-0 grille-card-body">
                         <div class="table-responsive">
                             <table class="table table-sm grille-table mb-0">
-                                <thead><tr><th>Catégorie</th><th>Item</th><th class="text-center" style="width:180px">Resultat</th><th>Commentaire</th></tr></thead>
+                                <thead><tr><th>Catégorie</th><th>Item</th><th class="text-center" style="width:180px">Résultat</th><th>Commentaire</th></tr></thead>
                                 <tbody id="grille-body"></tbody>
                             </table>
                         </div>
@@ -4791,10 +4791,10 @@ const VmcFormPage = {
             </div>
         </div>
 
-        <!-- Actions a mettre en oeuvre -->
+        <!-- Actions à mettre en œuvre -->
         <div class="card mb-3">
             <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center">
-                <span>📋 Actions a mettre en oeuvre</span>
+                <span>📋 Actions à mettre en œuvre</span>
                 <button type="button" class="btn btn-sm btn-outline-primary" id="btn-add-action-vmc">+ Ajouter</button>
             </div>
             <div class="card-body p-0">
@@ -4873,7 +4873,7 @@ const VmcFormPage = {
 
         <!-- Boutons -->
         <div class="d-flex gap-2 mb-4">
-            <button type="submit" class="btn btn-primary">✓ ${isEdit ? 'Mettre a jour' : 'Enregistrer'}</button>
+            <button type="submit" class="btn btn-primary">✓ ${isEdit ? 'Mettre à jour' : 'Enregistrer'}</button>
             ${isEdit ? `<button type="button" class="btn btn-outline-danger" id="btn-delete-vmc">🗑️ Supprimer</button>` : ''}
             <button type="button" class="btn btn-secondary" onclick="location.hash='#vmc-list'">Annuler</button>
         </div>
@@ -5285,7 +5285,7 @@ const VmcFormPage = {
             // Sauvegarder le PDF dans OneDrive pour envoi automatique (Power Automate)
             try {
                 const saved = await ImportExport.savePdfToOneDrive(vmcId);
-                if (saved) showToast('PDF depose dans PDF_envois/ — email automatique dans quelques minutes', 'info');
+                if (saved) showToast('PDF déposé dans PDF_envois/ — email automatique dans quelques minutes', 'info');
             } catch (e) {
                 console.warn('Erreur sauvegarde PDF OneDrive:', e);
             }
@@ -5387,7 +5387,7 @@ const VmcFormPage = {
                     text: 'Rapport de Visite Managerielle de Chantier',
                     files: [file]
                 });
-                showToast('Rapport partage avec succes');
+                showToast('Rapport partagé avec succès');
             } else {
                 // Fallback : telecharger le fichier
                 const url = URL.createObjectURL(result.blob);
@@ -5396,7 +5396,7 @@ const VmcFormPage = {
                 a.download = result.fileName;
                 a.click();
                 URL.revokeObjectURL(url);
-                showToast('PDF téléchargé (partage non supporté sur ce navigateur)');
+                showToast('PDF téléchargé (partage non supporté par ce navigateur)');
             }
         } catch (err) {
             if (err.name !== 'AbortError') {
@@ -5642,7 +5642,7 @@ const VmcListPage = {
                     text: 'Rapport de Visite Managerielle de Chantier',
                     files: [file]
                 });
-                showToast('Rapport partage');
+                showToast('Rapport partagé');
             } else {
                 const url = URL.createObjectURL(result.blob);
                 const a = document.createElement('a');
@@ -5700,9 +5700,9 @@ const ActionsPage = {
                         <label class="form-label small mb-0">Statut</label>
                         <select class="form-select form-select-sm" id="fa-statut">
                             <option value="" selected>Tous</option>
-                            <option value="A faire">A faire</option>
+                            <option value="A faire">À faire</option>
                             <option value="En cours">En cours</option>
-                            <option value="Soldee">Soldee</option>
+                            <option value="Soldee">Soldée</option>
                         </select>
                     </div>
                     <div class="col-auto">
@@ -5838,7 +5838,7 @@ const ActionsPage = {
                     action.dateCloture = new Date().toISOString().slice(0, 10);
                     action.updatedAt = new Date().toISOString();
                     await DB.putAction(action);
-                    showToast('Action soldee');
+                    showToast('Action soldée');
                     this._applyFilters();
                 }
             };
@@ -5859,13 +5859,13 @@ const ActionsPage = {
                 const action = await DB.getAction(Number(b.dataset.id));
                 if (!action) return;
                 const vmc = action.vmcId ? this._vmcMap[action.vmcId] : null;
-                if (!vmc) { showToast('Aucune VMC associee a cette action', 'warning'); return; }
+                if (!vmc) { showToast('Aucune VMC associée à cette action', 'warning'); return; }
                 const cond = await DB.getConducteur(vmc.conducteurId);
-                if (!cond?.email) { showToast('Pas d\'email renseigne pour ' + (vmc.conducteurNom || 'cet observateur'), 'warning'); return; }
+                if (!cond?.email) { showToast('Pas d\'email renseigné pour ' + (vmc.conducteurNom || 'cet observateur'), 'warning'); return; }
 
                 const tpl = await DB.getConfig('email_rappel_action') || {
                     sujet: 'Rappel action corrective - VMC du {date_vmc}',
-                    corps: 'Bonjour {prenom},\n\nPour faire suite a la Visite Manageriale de Chantier du {date_vmc} ({site}), je vous rappelle l\'action suivante :\n\nAction : {description}\nResponsable : {responsable}\nDelai : {delai}\nStatut actuel : {statut}\n\nMerci de bien vouloir traiter cette action dans les meilleurs delais.\n\nCordialement'
+                    corps: 'Bonjour {prenom},\n\nPour faire suite à la Visite Managériale de Chantier du {date_vmc} ({site}), je vous rappelle l\'action suivante :\n\nAction : {description}\nResponsable : {responsable}\nDélai : {delai}\nStatut actuel : {statut}\n\nMerci de bien vouloir traiter cette action dans les meilleurs délais.\n\nCordialement'
                 };
 
                 const vars = {
@@ -5929,9 +5929,9 @@ const ActionsPage = {
                     <div class="col">
                         <label class="form-label">Statut</label>
                         <select class="form-select" id="act-statut">
-                            <option value="A faire" ${action?.statut === 'A faire' || !action ? 'selected' : ''}>A faire</option>
+                            <option value="A faire" ${action?.statut === 'A faire' || !action ? 'selected' : ''}>À faire</option>
                             <option value="En cours" ${action?.statut === 'En cours' ? 'selected' : ''}>En cours</option>
-                            <option value="Soldee" ${action?.statut === 'Soldee' ? 'selected' : ''}>Soldee</option>
+                            <option value="Soldee" ${action?.statut === 'Soldee' ? 'selected' : ''}>Soldée</option>
                         </select>
                     </div>
                 </div>
@@ -5970,7 +5970,7 @@ const ActionsPage = {
             }
             await DB.putAction(data);
             modal.hide();
-            showToast(isEdit ? 'Action modifiee' : 'Action ajoutee');
+            showToast(isEdit ? 'Action modifiée' : 'Action ajoutée');
             this._applyFilters();
         };
     },
@@ -6240,7 +6240,7 @@ const ImportExport = {
                 }
             }
 
-            showToast(`Import termine : ${importedConducteurs} observateur(s), ${importedVisites} visite(s), ${importedVmcs} VMC(s), ${importedActions} action(s)`);
+            showToast(`Import terminé : ${importedConducteurs} observateur(s), ${importedVisites} visite(s), ${importedVmcs} VMC(s), ${importedActions} action(s)`);
             if (location.hash.includes('config')) {
                 ConfigPage.render(document.getElementById('app-content'));
             }
@@ -6422,7 +6422,7 @@ const ImportExport = {
         if (vmc.actionsVmc && vmc.actionsVmc.length) {
             doc.setFontSize(9);
             doc.setFont(undefined, 'bold');
-            doc.text('Actions a mettre en oeuvre', margin, y);
+            doc.text('Actions à mettre en œuvre', margin, y);
             y += 2;
 
             const actHead = [['N\u00b0', 'Actions', 'Responsable', 'Délai']];
@@ -6642,7 +6642,7 @@ const RemarquesPage = {
 
         container.innerHTML = `
         <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-            <h4 class="mb-0">\u{1F4DD} Recapitulatif des Remarques</h4>
+            <h4 class="mb-0">\u{1F4DD} Récapitulatif des Remarques</h4>
             <button class="btn btn-success btn-sm" id="btn-export-remarques">\u{1F4E5} Export Excel</button>
         </div>
 
@@ -6785,7 +6785,7 @@ const RemarquesPage = {
     async _exportExcel() {
         const vmcs = await this._getFilteredVmcs();
         if (!vmcs.length) {
-            showToast('Aucune remarque a exporter', 'warning');
+            showToast('Aucune remarque à exporter', 'warning');
             return;
         }
 
@@ -6808,7 +6808,7 @@ const RemarquesPage = {
         XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Remarques');
         const today = new Date().toISOString().slice(0, 10);
         XLSX.writeFile(wb, `Remarques_VMC_${today}.xlsx`);
-        showToast('Export Excel termine');
+        showToast('Export Excel terminé');
     },
 
     _fmtDate(iso) {
