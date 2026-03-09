@@ -7004,6 +7004,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Pas de donnees embarquees : utiliser le seed
                 await ensureSeed();
             }
+            // Toujours vérifier les conducteurs manquants (nouveaux ajouts au SEED)
+            for (const c of SEED_CONDUCTEURS) {
+                const existing = await db.conducteurs.get(c.id);
+                if (!existing) {
+                    await db.conducteurs.put(c);
+                    console.log('VMCManager: conducteur ajoute -', c.nom);
+                }
+            }
         })
         .then(async () => {
             if (window._vmcAppLoaded) window._vmcAppLoaded();
