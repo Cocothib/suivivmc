@@ -3961,24 +3961,6 @@ const DashboardPage = {
             </div>
         </div>
 
-        <!-- Pareto des non-conformités -->
-        <div class="row g-3 mb-4">
-            <div class="col-12">
-                <div class="card">
-                    <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center">
-                        <span>📊 Pareto des non-conformités</span>
-                        <span class="badge bg-danger" id="pareto-total-badge"></span>
-                    </div>
-                    <div class="card-body py-2 px-2">
-                        <div id="pareto-empty" class="text-center text-muted py-3 d-none">Aucune non-conformité enregistrée</div>
-                        <div id="pareto-chart-wrapper" style="position:relative;height:250px">
-                            <canvas id="chart-pareto"></canvas>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
         <!-- Prochaines visites & Actions recentes -->
         <div class="row g-3">
             <div class="col-md-6">
@@ -4006,7 +3988,6 @@ const DashboardPage = {
         </div>`;
 
         this._renderChart(visites, annee);
-        this._renderPareto(vmcs);
         this._renderProchaines(visites, conducteurs);
         this._renderActionsRecentes(actions, vmcs, conducteurs);
         this._bindKpiCards();
@@ -4048,105 +4029,6 @@ const DashboardPage = {
                 maintainAspectRatio: false,
                 plugins: { legend: { position: 'bottom', labels: { boxWidth: 12 } } },
                 scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }
-            }
-        });
-    },
-
-    _renderPareto(vmcs) {
-        const canvas = document.getElementById('chart-pareto');
-        const emptyMsg = document.getElementById('pareto-empty');
-        const wrapper = document.getElementById('pareto-chart-wrapper');
-        const badge = document.getElementById('pareto-total-badge');
-        if (!canvas) return;
-
-        // Compter les NOK par item de grille
-        const nokCounts = {};
-        vmcs.forEach(v => {
-            if (!v.grille || !v.grille.length) return;
-            v.grille.forEach(g => {
-                if (g.resultat === 'NOK') {
-                    const label = g.item || 'Sans intitulé';
-                    nokCounts[label] = (nokCounts[label] || 0) + 1;
-                }
-            });
-        });
-
-        const entries = Object.entries(nokCounts).sort((a, b) => b[1] - a[1]);
-        if (!entries.length) {
-            wrapper.style.display = 'none';
-            emptyMsg.classList.remove('d-none');
-            badge.textContent = '0 NOK';
-            return;
-        }
-
-        // Tronquer les labels pour lisibilité
-        const labels = entries.map(([label]) => {
-            if (label.length > 40) return label.slice(0, 37) + '...';
-            return label;
-        });
-        const fullLabels = entries.map(([label]) => label);
-        const values = entries.map(([, count]) => count);
-        const total = values.reduce((s, v) => s + v, 0);
-        badge.textContent = total + ' NOK';
-
-        // Cumul en pourcentage
-        let cumul = 0;
-        const cumulPct = values.map(v => { cumul += v; return Math.round((cumul / total) * 100); });
-
-        // Hauteur dynamique selon le nombre d'items (barres horizontales)
-        const barH = Math.max(entries.length * 28, 120);
-        wrapper.style.height = Math.min(barH, 400) + 'px';
-
-        new Chart(canvas, {
-            type: 'bar',
-            data: {
-                labels,
-                datasets: [
-                    {
-                        label: 'NOK',
-                        data: values,
-                        backgroundColor: values.map((_, i) => cumulPct[i] <= 80 ? 'rgba(220,53,69,0.85)' : 'rgba(255,193,7,0.75)'),
-                        borderRadius: 2,
-                        barThickness: 16,
-                        xAxisID: 'x'
-                    },
-                    {
-                        label: 'Cumul %',
-                        data: cumulPct,
-                        type: 'line',
-                        borderColor: '#00693E',
-                        backgroundColor: 'transparent',
-                        borderWidth: 2,
-                        pointRadius: 2,
-                        pointBackgroundColor: '#00693E',
-                        tension: 0.3,
-                        xAxisID: 'x1'
-                    }
-                ]
-            },
-            options: {
-                indexAxis: 'y',
-                responsive: true,
-                maintainAspectRatio: false,
-                layout: { padding: { right: 5 } },
-                interaction: { mode: 'index', intersect: false },
-                plugins: {
-                    legend: { display: false },
-                    tooltip: {
-                        callbacks: {
-                            title: function(items) { return fullLabels[items[0].dataIndex]; },
-                            label: function(ctx) {
-                                if (ctx.datasetIndex === 0) return `${ctx.parsed.x} NOK`;
-                                return `Cumul : ${ctx.parsed.x}%`;
-                            }
-                        }
-                    }
-                },
-                scales: {
-                    y: { ticks: { font: { size: 10 }, crossAlign: 'far' }, grid: { display: false } },
-                    x:  { position: 'top', beginAtZero: true, ticks: { stepSize: 1, font: { size: 9 } }, grid: { color: 'rgba(0,0,0,0.05)' } },
-                    x1: { position: 'bottom', min: 0, max: 100, ticks: { callback: v => v + '%', font: { size: 9 } }, grid: { drawOnChartArea: false } }
-                }
             }
         });
     },
