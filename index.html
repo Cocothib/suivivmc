@@ -1808,7 +1808,8 @@ const SEED_CONDUCTEURS = [
     { id: 161, nom: 'Grégoire DE CHILLAZ', agence: 'Bailly-Romainvilliers', email: 'gdechillaz@generationsrenouvelables.com' },
     { id: 162, nom: 'Thibault HOCEDEZ', agence: 'Seclin', email: 'thocedez@agriwatt.fr' },
     { id: 163, nom: 'Anne Laure PAQUET', agence: 'Vervins', email: 'apaquet@agriwatt.fr' },
-    { id: 164, nom: 'Aurelia CHIARAMONTE', agence: 'Seclin', email: 'achiaramonte@agriwatt.fr' }
+    { id: 164, nom: 'Aurelia CHIARAMONTE', agence: 'Seclin', email: 'achiaramonte@agriwatt.fr' },
+    { id: 165, nom: 'Franck LAMY', agence: 'Bouxieres-sous-Froidmont', email: 'flamy@agriwatt.fr' }
 ];
 
 const SEED_VISITES_PLANIFIEES = [
@@ -1979,7 +1980,19 @@ const SEED_VISITES_PLANIFIEES = [
     { conducteurId: 164, mois: 9, annee: 2026, datePrevue: '2026-09-16' },
     { conducteurId: 164, mois: 10, annee: 2026, datePrevue: '2026-10-21' },
     { conducteurId: 164, mois: 11, annee: 2026, datePrevue: '2026-11-18' },
-    { conducteurId: 164, mois: 12, annee: 2026, datePrevue: '2026-12-16' }
+    { conducteurId: 164, mois: 12, annee: 2026, datePrevue: '2026-12-16' },
+    { conducteurId: 165, mois: 1, annee: 2026, datePrevue: '2026-01-20' },
+    { conducteurId: 165, mois: 2, annee: 2026, datePrevue: '2026-02-17' },
+    { conducteurId: 165, mois: 3, annee: 2026, datePrevue: '2026-03-17' },
+    { conducteurId: 165, mois: 4, annee: 2026, datePrevue: '2026-04-21' },
+    { conducteurId: 165, mois: 5, annee: 2026, datePrevue: '2026-05-19' },
+    { conducteurId: 165, mois: 6, annee: 2026, datePrevue: '2026-06-16' },
+    { conducteurId: 165, mois: 7, annee: 2026, datePrevue: '2026-07-21' },
+    { conducteurId: 165, mois: 8, annee: 2026, datePrevue: '2026-08-18' },
+    { conducteurId: 165, mois: 9, annee: 2026, datePrevue: '2026-09-15' },
+    { conducteurId: 165, mois: 10, annee: 2026, datePrevue: '2026-10-20' },
+    { conducteurId: 165, mois: 11, annee: 2026, datePrevue: '2026-11-17' },
+    { conducteurId: 165, mois: 12, annee: 2026, datePrevue: '2026-12-15' }
 ];
 
 /* ---------- Seed automatique (fonctionne a la creation ET apres migration) ---------- */
@@ -2103,6 +2116,15 @@ async function ensureSeed() {
         console.log('VMCManager: tables vides apres migration, injection des donnees...');
         await _seedData();
         console.log('VMCManager: donnees injectees avec succes');
+    } else {
+        // Ajouter les conducteurs manquants (nouveaux ajouts au SEED)
+        for (const c of SEED_CONDUCTEURS) {
+            const existing = await db.conducteurs.get(c.id);
+            if (!existing) {
+                await db.conducteurs.put(c);
+                console.log('VMCManager: conducteur ajoute -', c.nom);
+            }
+        }
     }
 }
 
@@ -6014,22 +6036,43 @@ const ImportExport = {
         }));
         XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(realData), 'Visites Réalisées');
 
-        // Feuille VMC
+        // Feuille VMC (enrichie avec remarques et observé)
         const vmcData = vmcs.map(v => ({
             'id':              v.id,
             'type':            v.type || '',
             'date':            v.date || '',
             'site':            v.site || '',
-            'visite_agw':      v.visiteAgw || '',
-            'visiteur_agw':    v.visiteurAgw || '',
+            'observe_nom':     v.observeNom || '',
             'conducteur_id':   v.conducteurId,
             'conducteur_nom':  v.conducteurNom || '',
             'score_ok':        v.scoreOk || 0,
             'score_ko':        v.scoreKo || 0,
             'score_nc':        v.scoreNc || 0,
+            'points_amelioration': v.pointsAmelioration || v.observations || '',
+            'bonnes_pratiques':    v.bonnesPratiques || '',
             'created_at':      v.createdAt || ''
         }));
         XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(vmcData), 'VMC');
+
+        // Feuille Grille détaillée (une ligne par item par VMC)
+        const grilleData = [];
+        vmcs.forEach(v => {
+            if (v.grille && v.grille.length) {
+                v.grille.forEach((g, idx) => {
+                    grilleData.push({
+                        'vmc_id':      v.id,
+                        'ordre':       idx + 1,
+                        'categorie':   g.categorie || '',
+                        'item':        g.item || '',
+                        'resultat':    g.resultat || '',
+                        'commentaire': g.commentaire || ''
+                    });
+                });
+            }
+        });
+        if (grilleData.length) {
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(grilleData), 'Grille');
+        }
 
         // Feuille Actions
         const actData = actions.map(a => ({
@@ -6112,42 +6155,78 @@ const ImportExport = {
                 }
             }
 
-            // Import VMC
+            // Import VMC (enrichi avec remarques, observé, grille)
+            const vmcIdMap = {}; // ancien id -> nouveau id
             if (wb.SheetNames.includes('VMC')) {
                 const rows = XLSX.utils.sheet_to_json(wb.Sheets['VMC']);
                 for (const row of rows) {
                     const conducteurId = parseInt(row['conducteur_id']) || 0;
                     if (!conducteurId) continue;
-                    await db.vmcs.add({
-                        type:          (row['type'] || '').toString().trim(),
+                    const oldId = parseInt(row['id']) || null;
+                    const newId = await db.vmcs.add({
+                        type:          (row['type'] || 'chantier').toString().trim(),
                         date:          this._parseExcelDate(row['date'] || ''),
                         site:          (row['site'] || '').toString().trim(),
-                        visiteAgw:     (row['visite_agw'] || '').toString().trim(),
-                        visiteurAgw:   (row['visiteur_agw'] || '').toString().trim(),
+                        observeNom:    (row['observe_nom'] || '').toString().trim(),
                         conducteurId,
                         conducteurNom: (row['conducteur_nom'] || '').toString().trim(),
                         scoreOk:       parseInt(row['score_ok']) || 0,
                         scoreKo:       parseInt(row['score_ko']) || 0,
                         scoreNc:       parseInt(row['score_nc']) || 0,
                         grille:        [],
-                        observations:  '',
+                        pointsAmelioration: (row['points_amelioration'] || '').toString().trim(),
+                        bonnesPratiques:    (row['bonnes_pratiques'] || '').toString().trim(),
+                        observations:  (row['points_amelioration'] || '').toString().trim(),
                         signatureObservateur: null,
                         signatureObserve:    null,
-                        createdAt:     (row['created_at'] || new Date().toISOString()).toString()
+                        createdAt:     (row['created_at'] || new Date().toISOString()).toString(),
+                        updatedAt:     new Date().toISOString()
                     });
+                    if (oldId) vmcIdMap[oldId] = newId;
                     importedVmcs++;
                 }
             }
 
-            // Import Actions
+            // Import Grille détaillée et rattachement aux VMC
+            if (wb.SheetNames.includes('Grille')) {
+                const rows = XLSX.utils.sheet_to_json(wb.Sheets['Grille']);
+                const grilleByVmc = {};
+                for (const row of rows) {
+                    const vmcId = parseInt(row['vmc_id']) || 0;
+                    if (!vmcId) continue;
+                    if (!grilleByVmc[vmcId]) grilleByVmc[vmcId] = [];
+                    grilleByVmc[vmcId].push({
+                        categorie:   (row['categorie'] || '').toString().trim(),
+                        item:        (row['item'] || '').toString().trim(),
+                        resultat:    (row['resultat'] || '').toString().trim().toUpperCase(),
+                        commentaire: (row['commentaire'] || '').toString().trim()
+                    });
+                }
+                for (const [oldId, grille] of Object.entries(grilleByVmc)) {
+                    const newId = vmcIdMap[oldId];
+                    if (newId) {
+                        const vmc = await db.vmcs.get(newId);
+                        if (vmc) {
+                            const scoreOk = grille.filter(g => g.resultat === 'OK').length;
+                            const scoreKo = grille.filter(g => g.resultat === 'NOK').length;
+                            const scoreNc = grille.filter(g => !g.resultat || g.resultat === 'NA').length;
+                            await db.vmcs.update(newId, { grille, scoreOk, scoreKo, scoreNc });
+                        }
+                    }
+                }
+            }
+
+            // Import Actions (avec mapping des IDs VMC)
             if (wb.SheetNames.includes('Actions')) {
                 const rows = XLSX.utils.sheet_to_json(wb.Sheets['Actions']);
                 for (const row of rows) {
                     const desc = (row['description'] || '').toString().trim();
                     if (!desc) continue;
                     const now = new Date().toISOString();
+                    const oldVmcId = parseInt(row['vmc_id']) || null;
+                    const mappedVmcId = oldVmcId && vmcIdMap[oldVmcId] ? vmcIdMap[oldVmcId] : oldVmcId;
                     await db.actions.add({
-                        vmcId:        parseInt(row['vmc_id']) || null,
+                        vmcId:        mappedVmcId,
                         description:  desc,
                         responsable:  (row['responsable'] || '').toString().trim(),
                         delai:        this._parseExcelDate(row['delai'] || ''),
