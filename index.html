@@ -3885,7 +3885,9 @@ const DashboardPage = {
         const vmcs        = await DB.getVmcs();
         const actions     = await DB.getActions();
 
-        const nbRealisees  = visites.filter(v => v.statut === 'realise' && v.vmcId).length;
+        // Compter les VMC réelles de l'année (source de vérité)
+        const vmcsAnnee = vmcs.filter(v => v.date && v.date.startsWith(String(annee)));
+        const nbRealisees  = vmcsAnnee.length;
         const nbPlanifiees = visites.filter(v => v.statut === 'planifie' && !v.annulee).length;
         const today = now.toISOString().slice(0, 10);
         const nbRetard = visites.filter(v => v.statut === 'planifie' && !v.annulee && v.datePrevue < today).length;
@@ -3987,7 +3989,7 @@ const DashboardPage = {
             </div>
         </div>`;
 
-        this._renderChart(visites, annee);
+        this._renderChart(visites, vmcsAnnee, annee);
         this._renderProchaines(visites, conducteurs);
         this._renderActionsRecentes(actions, vmcs, conducteurs);
         this._bindKpiCards();
@@ -4000,17 +4002,24 @@ const DashboardPage = {
         document.getElementById('kpi-actions').onclick     = () => { location.hash = '#actions'; };
     },
 
-    _renderChart(visites, annee) {
-        const moisLabels = ['Jan','Fev','Mar','Avr','Mai','Jun','Jul','Aou','Sep','Oct','Nov','Dec'];
+    _renderChart(visites, vmcsAnnee, annee) {
+        const moisLabels = ['Jan','Fév','Mar','Avr','Mai','Jun','Jul','Aoû','Sep','Oct','Nov','Déc'];
         const réalisées = new Array(12).fill(0);
         const planifiées = new Array(12).fill(0);
 
+        // Compter les VMC réelles par mois
+        vmcsAnnee.forEach(v => {
+            if (!v.date) return;
+            const m = parseInt(v.date.slice(5, 7)) - 1;
+            if (m >= 0 && m <= 11) réalisées[m]++;
+        });
+
+        // Compter les visites encore planifiées (non réalisées)
         visites.forEach(v => {
             if (v.annulee) return;
             const m = v.mois - 1;
             if (m < 0 || m > 11) return;
-            if (v.statut === 'realise' && v.vmcId) réalisées[m]++;
-            else planifiées[m]++;
+            if (v.statut === 'planifie') planifiées[m]++;
         });
 
         const ctx = document.getElementById('chart-visites');
