@@ -3961,6 +3961,19 @@ const DashboardPage = {
             </div>
         </div>
 
+        <!-- Pareto des non-conformités -->
+        <div class="row g-3 mb-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header bg-white fw-bold">📊 Pareto des non-conformités (NOK)</div>
+                    <div class="card-body">
+                        <div id="pareto-empty" class="text-center text-muted py-3 d-none">Aucune non-conformité enregistrée</div>
+                        <canvas id="chart-pareto" height="220"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Prochaines visites & Actions recentes -->
         <div class="row g-3">
             <div class="col-md-6">
@@ -3988,6 +4001,7 @@ const DashboardPage = {
         </div>`;
 
         this._renderChart(visites, annee);
+        this._renderPareto(vmcs);
         this._renderProchaines(visites, conducteurs);
         this._renderActionsRecentes(actions, vmcs, conducteurs);
         this._bindKpiCards();
@@ -4029,6 +4043,89 @@ const DashboardPage = {
                 maintainAspectRatio: false,
                 plugins: { legend: { position: 'bottom', labels: { boxWidth: 12 } } },
                 scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }
+            }
+        });
+    },
+
+    _renderPareto(vmcs) {
+        const canvas = document.getElementById('chart-pareto');
+        const emptyMsg = document.getElementById('pareto-empty');
+        if (!canvas) return;
+
+        // Compter les NOK par item de grille
+        const nokCounts = {};
+        vmcs.forEach(v => {
+            if (!v.grille || !v.grille.length) return;
+            v.grille.forEach(g => {
+                if (g.resultat === 'NOK') {
+                    const label = g.item || 'Sans intitulé';
+                    nokCounts[label] = (nokCounts[label] || 0) + 1;
+                }
+            });
+        });
+
+        const entries = Object.entries(nokCounts).sort((a, b) => b[1] - a[1]);
+        if (!entries.length) {
+            canvas.style.display = 'none';
+            emptyMsg.classList.remove('d-none');
+            return;
+        }
+
+        // Tronquer les labels longs
+        const labels = entries.map(([label]) => label.length > 50 ? label.slice(0, 47) + '...' : label);
+        const values = entries.map(([, count]) => count);
+        const total = values.reduce((s, v) => s + v, 0);
+
+        // Cumul en pourcentage
+        let cumul = 0;
+        const cumulPct = values.map(v => { cumul += v; return Math.round((cumul / total) * 100); });
+
+        new Chart(canvas, {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [
+                    {
+                        label: 'Nombre de NOK',
+                        data: values,
+                        backgroundColor: values.map((_, i) => cumulPct[i] <= 80 ? '#dc3545' : '#ffc107'),
+                        borderRadius: 3,
+                        yAxisID: 'y'
+                    },
+                    {
+                        label: 'Cumul %',
+                        data: cumulPct,
+                        type: 'line',
+                        borderColor: '#00693E',
+                        backgroundColor: 'transparent',
+                        borderWidth: 2,
+                        pointRadius: 3,
+                        pointBackgroundColor: '#00693E',
+                        tension: 0.3,
+                        yAxisID: 'y1'
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { position: 'bottom', labels: { boxWidth: 12 } },
+                    tooltip: {
+                        callbacks: {
+                            label: function(ctx) {
+                                if (ctx.datasetIndex === 0) return `${ctx.parsed.y} NOK`;
+                                return `Cumul : ${ctx.parsed.y}%`;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: { ticks: { maxRotation: 45, font: { size: 9 } } },
+                    y: { beginAtZero: true, ticks: { stepSize: 1 }, title: { display: true, text: 'NOK' } },
+                    y1: { position: 'right', min: 0, max: 100, ticks: { callback: v => v + '%' }, grid: { drawOnChartArea: false }, title: { display: true, text: 'Cumul %' } }
+                }
             }
         });
     },
