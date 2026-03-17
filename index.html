@@ -6611,11 +6611,12 @@ const ImportExport = {
                 createdAt: new Date().toISOString()
             };
 
-            const jsonFileName = result.fileName.replace('.pdf', '.json');
-            const jsonPath = VMC_CONFIG.DATA_FOLDER_PATH + '/PDF_envois/' + jsonFileName;
-            await _writeJsonFile(jsonPath, meta);
+            // JSON métadonnées désactivé — à réactiver quand Power Automate sera en place
+            // const jsonFileName = result.fileName.replace('.pdf', '.json');
+            // const jsonPath = VMC_CONFIG.DATA_FOLDER_PATH + '/PDF_envois/' + jsonFileName;
+            // await _writeJsonFile(jsonPath, meta);
 
-            console.log('ImportExport: PDF + metadonnees uploades sur SharePoint/PDF_envois/', result.fileName);
+            console.log('ImportExport: PDF uploade sur SharePoint/PDF_envois/', result.fileName);
             return true;
         } catch (e) {
             console.error('ImportExport: erreur sauvegarde PDF OneDrive', e);
