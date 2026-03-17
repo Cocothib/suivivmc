@@ -3408,13 +3408,6 @@ const ConfigPage = {
                     </div>
                 </div></div>
 
-                <!-- Maintenance SharePoint -->
-                <div class="card border-info mb-3"><div class="card-body">
-                    <h6 class="text-info"><i class="bi bi-cloud-arrow-up"></i> Maintenance SharePoint</h6>
-                    <p class="text-muted small">Régénère tous les PDF sur SharePoint avec la compression optimisée. Nécessite d'être connecté à SharePoint.</p>
-                    <button class="btn btn-outline-info btn-sm" id="btn-regen-pdfs"><i class="bi bi-arrow-repeat"></i> Régénérer tous les PDF SharePoint</button>
-                </div></div>
-
                 <!-- Zone dangereuse -->
                 <div class="card border-danger"><div class="card-body">
                     <h6 class="text-danger">\u26A0\uFE0F Zone dangereuse</h6>
@@ -3865,15 +3858,6 @@ const ConfigPage = {
             const file = e.target.files[0];
             if (file) ImportExport.importXLSX(file);
         };
-        document.getElementById('btn-regen-pdfs').onclick = async () => {
-            if (!DataSync._connected) { showToast('Connectez-vous à SharePoint d\'abord', 'warning'); return; }
-            if (!confirm('Régénérer et re-uploader tous les PDF sur SharePoint ?')) return;
-            const btn = document.getElementById('btn-regen-pdfs');
-            btn.disabled = true; btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Régénération en cours...';
-            await ImportExport.regenerateAllPdfs();
-            btn.disabled = false; btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> Régénérer tous les PDF SharePoint';
-        };
-
         document.getElementById('btn-reset-db').onclick = async () => {
             if (confirm('Supprimer TOUTES les données locales ? Les données du fichier partagé ne sont pas affectées.')) {
                 await db.delete();
