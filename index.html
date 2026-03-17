@@ -5039,8 +5039,8 @@ const VmcFormPage = {
        ================================================================ */
     _photos: [],
     MAX_PHOTOS: 5,
-    PHOTO_MAX_WIDTH: 800,
-    PHOTO_QUALITY: 0.55,
+    PHOTO_MAX_SIZE: 1024,
+    PHOTO_QUALITY: 0.6,
 
     _initPhotos(existing) {
         this._photos = existing ? [...existing] : [];
@@ -5096,10 +5096,11 @@ const VmcFormPage = {
                     let w = img.width;
                     let h = img.height;
 
-                    // Redimensionner si trop large
-                    if (w > this.PHOTO_MAX_WIDTH) {
-                        h = Math.round(h * this.PHOTO_MAX_WIDTH / w);
-                        w = this.PHOTO_MAX_WIDTH;
+                    // Redimensionner si trop grand (largeur ou hauteur)
+                    const MAX = this.PHOTO_MAX_SIZE;
+                    if (w > MAX || h > MAX) {
+                        if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
+                        else { w = Math.round(w * MAX / h); h = MAX; }
                     }
 
                     canvas.width = w;
