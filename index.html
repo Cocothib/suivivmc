@@ -3819,7 +3819,7 @@ const ConfigPage = {
 
         const statusEl = document.getElementById('cfg-sync-status');
         if (DataSync._connected) {
-            const spPath = VMC_CONFIG.SHAREPOINT_SITE_PATH + '/' + VMC_CONFIG.DATA_FOLDER_PATH;
+            const spPath = VMC_CONFIG.SHAREPOINT_SITE_PATH + '/' + VMC_CONFIG.DATA_FOLDER_PATH.replace(/^Documents\//, '');
             const user = _msalAccount?.name || DataSync.getUserName() || '';
             const lastSaved = DataSync._lastSavedAt
                 ? new Date(DataSync._lastSavedAt).toLocaleString('fr-FR')
