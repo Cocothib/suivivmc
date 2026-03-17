@@ -6624,6 +6624,26 @@ const ImportExport = {
         }
     },
 
+    async regenerateAllPdfs() {
+        if (!DataSync._connected) { showToast('Connectez-vous à SharePoint d\'abord', 'warning'); return; }
+        const vmcs = await db.vmcs.toArray();
+        if (!vmcs.length) { showToast('Aucune VMC trouvée', 'info'); return; }
+        const total = vmcs.length; let ok = 0, fail = 0;
+        showToast(`Régénération de ${total} PDF en cours...`, 'info');
+        for (const vmc of vmcs) {
+            try {
+                const result = await this._buildPDF(vmc.id);
+                if (!result) { fail++; continue; }
+                const pdfBlob = result.doc.output('blob');
+                const pdfPath = VMC_CONFIG.DATA_FOLDER_PATH + '/PDF_envois/' + result.fileName;
+                await _uploadBinaryFile(pdfPath, pdfBlob);
+                ok++;
+                console.log(`Régénéré ${ok}/${total}: ${result.fileName}`);
+            } catch (e) { fail++; console.error('Erreur régénération VMC', vmc.id, e); }
+        }
+        showToast(`Terminé : ${ok} PDF régénérés, ${fail} erreurs`, ok === total ? 'success' : 'warning');
+    },
+
     _fmtDatePDF(iso) {
         if (!iso) return '-';
         const [y, m, d] = iso.split('-');
