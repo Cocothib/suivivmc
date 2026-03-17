@@ -3818,16 +3818,17 @@ const ConfigPage = {
         nameInput.value = DataSync.getUserName();
 
         const statusEl = document.getElementById('cfg-sync-status');
-        if (DataSync._dirHandle) {
-            const folder = DataSync._dirHandle.name || '?';
+        if (DataSync._connected) {
+            const spPath = VMC_CONFIG.SHAREPOINT_SITE_PATH + '/' + VMC_CONFIG.DATA_FOLDER_PATH;
+            const user = _msalAccount?.name || DataSync.getUserName() || '';
             const lastSaved = DataSync._lastSavedAt
                 ? new Date(DataSync._lastSavedAt).toLocaleString('fr-FR')
                 : 'jamais';
             const version = DataSync._loadedMeta?.version || '-';
-            statusEl.innerHTML = `<span class="text-success">\u2705 Connecté</span> — dossier : <strong>${folder}</strong><br>
+            statusEl.innerHTML = `<span class="text-success">\u2705 Connecté</span> — <strong>${spPath}</strong>${user ? ' ('+user+')' : ''}<br>
                 <span class="text-muted">Dernière sauvegarde : ${lastSaved} (v${version})</span>`;
         } else {
-            statusEl.innerHTML = '<span class="text-danger">\u274C Non connecté</span> — cliquez "Reconnecter" pour sélectionner le dossier';
+            statusEl.innerHTML = '<span class="text-danger">\u274C Non connecté</span> — cliquez "Reconnecter" pour se connecter à SharePoint';
         }
 
         document.getElementById('btn-save-username').onclick = () => {
