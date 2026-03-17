@@ -3387,11 +3387,48 @@ const ConfigPage = {
                         </div>
                     </div>
                     <div class="alert alert-light border small mt-3 mb-0">
-                        <strong>Comment ca marche :</strong> Le fichier <code>SuiviVMC.html</code> contient toutes les données.
-                        Quand vous sauvegardez, les données sont écrites directement dans ce fichier.
-                        OneDrive synchronise ensuite le fichier pour tous les utilisateurs.<br>
-                        <strong>Dossier a connecter :</strong>
-                        <code>Agriwatt \u25B8 QHSE - Documents \u25B8 5_VISITES MANAGERIALES DE CHANTIER \u25B8 Suivi VMC</code>
+                        <strong>Comment ca marche :</strong> Les données sont stockées localement sur votre appareil (IndexedDB).
+                        Quand vous êtes connecté à SharePoint, elles sont automatiquement synchronisées sur le cloud (toutes les 2 secondes après modification).
+                        Les autres utilisateurs connectés reçoivent les mises à jour toutes les 15 secondes.<br>
+                        <strong>Emplacement SharePoint :</strong>
+                        <code>QHSE \u25B8 Documents \u25B8 Documents \u25B8 SuiviVMC</code><br>
+                        <strong>Les PDF générés</strong> sont automatiquement uploadés dans le sous-dossier <code>PDF_envois</code>.
+                    </div>
+                </div></div>
+
+                <!-- Aide / Tutoriel -->
+                <div class="card mb-3 border-success"><div class="card-body">
+                    <h6 class="text-success"><i class="bi bi-question-circle"></i> Guide d'utilisation</h6>
+                    <div class="small">
+                        <p class="fw-bold mb-2">1. Créer une VMC</p>
+                        <ul class="mb-2">
+                            <li>Depuis le <strong>tableau de bord</strong>, cliquez sur <strong>+ Nouvelle VMC</strong></li>
+                            <li>Sélectionnez l'<strong>observateur</strong> (à configurer au préalable dans Paramètres > Observateurs)</li>
+                            <li>Choisissez le <strong>type de visite</strong> et renseignez le <strong>site</strong> et la <strong>date</strong></li>
+                            <li>Remplissez la <strong>grille d'évaluation</strong> : cochez OK, NOK ou N/A pour chaque point de contrôle</li>
+                            <li>Ajoutez des <strong>photos terrain</strong> (5 max, compressées automatiquement)</li>
+                            <li>Notez les <strong>actions correctives</strong> si nécessaire (responsable, délai, priorité)</li>
+                            <li>Faites signer l'<strong>observateur</strong> et l'<strong>observé</strong></li>
+                        </ul>
+                        <p class="fw-bold mb-2">2. Exporter et envoyer</p>
+                        <ul class="mb-2">
+                            <li><strong>PDF</strong> : cliquez sur l'icône PDF dans la liste des VMC — le fichier est aussi sauvegardé automatiquement sur SharePoint</li>
+                            <li><strong>Partager</strong> : utilisez le bouton de partage pour envoyer le PDF par email ou messagerie (mobile)</li>
+                        </ul>
+                        <p class="fw-bold mb-2">3. Synchronisation SharePoint</p>
+                        <ul class="mb-2">
+                            <li>Cliquez sur le bouton <strong>cloud</strong> dans la barre de navigation pour vous connecter avec votre compte Microsoft</li>
+                            <li>La synchronisation est <strong>automatique</strong> : vos modifications sont sauvegardées en continu</li>
+                            <li>Si un collègue modifie des données, vous recevez la mise à jour automatiquement</li>
+                            <li>L'application fonctionne aussi <strong>hors ligne</strong> — les données seront synchronisées à la reconnexion</li>
+                        </ul>
+                        <p class="fw-bold mb-2">4. Paramétrage</p>
+                        <ul class="mb-0">
+                            <li><strong>Observateurs</strong> : ajoutez les personnes qui réalisent les VMC</li>
+                            <li><strong>Grilles</strong> : personnalisez les points de contrôle par type de visite (chantier, atelier, etc.)</li>
+                            <li><strong>Entreprise</strong> : renseignez les informations qui apparaissent sur les PDF</li>
+                            <li><strong>Email</strong> : configurez le modèle d'email et les destinataires par défaut</li>
+                        </ul>
                     </div>
                 </div></div>
 
@@ -3411,7 +3448,7 @@ const ConfigPage = {
                 <!-- Zone dangereuse -->
                 <div class="card border-danger"><div class="card-body">
                     <h6 class="text-danger">\u26A0\uFE0F Zone dangereuse</h6>
-                    <p class="text-muted small">La reinitialisation supprime toutes les données locales. Les données du fichier partagé ne sont pas affectées.</p>
+                    <p class="text-muted small">La reinitialisation supprime toutes les données locales. Les données SharePoint ne sont pas affectées.</p>
                     <button class="btn btn-outline-danger btn-sm" id="btn-reset-db">\u{1F5D1} Reinitialiser la base locale</button>
                 </div></div>
             </div>
