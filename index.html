@@ -5851,7 +5851,7 @@ const ActionsPage = {
 
             const overdue = a.delai && a.delai < today && a.statut !== 'Soldee';
             return `<tr class="${overdue ? 'table-danger' : ''}">
-                <td>${vmc ? vmc.conducteurNom : '-'}</td>
+                <td>${vmc ? `<a href="#vmc-edit/${vmc.id}" class="text-decoration-none fw-bold" title="Voir la VMC du ${vmc.date ? this._fmtDate(vmc.date) : ''}">${vmc.conducteurNom}</a>` : '-'}</td>
                 <td class="text-truncate" style="max-width:250px">${a.description || ''}</td>
                 <td>${a.responsable || '-'}</td>
                 <td>${a.delai ? this._fmtDate(a.delai) : '-'} ${overdue ? '<span class="text-danger">\u26A0\uFE0F</span>' : ''}</td>
@@ -5860,6 +5860,7 @@ const ActionsPage = {
                 <td><span class="badge bg-${statutColors[a.statut] || 'secondary'}">${a.statut || '-'}</span></td>
                 <td>
                     <div class="btn-group btn-group-sm">
+                        ${a.vmcId ? `<a href="#vmc-edit/${a.vmcId}" class="btn btn-outline-secondary btn-view-vmc" title="Voir la VMC">\u{1F441}</a>` : ''}
                         <button class="btn btn-outline-primary btn-edit-action" data-id="${a.id}" title="Modifier">\u270E</button>
                         ${a.statut !== 'Soldee' ? `<button class="btn btn-outline-info btn-mail-action" data-id="${a.id}" title="Envoyer un rappel par email">\u{1F4E7}</button>` : ''}
                         ${a.statut !== 'Soldee' ? `<button class="btn btn-outline-success btn-close-action" data-id="${a.id}" title="Solder">\u2714</button>` : ''}
