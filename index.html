@@ -2,7 +2,10 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="VMC">
     <title>Suivi VMC - Agriwatt</title>
     <style>
 @charset "UTF-8";/*!
@@ -1034,6 +1037,14 @@ body {
         box-shadow: none;
         border: 1px solid #ddd;
     }
+}
+
+/* Safari iOS - Safe area pour encoches */
+body {
+    padding-top: env(safe-area-inset-top, 0);
+}
+.navbar {
+    padding-top: env(safe-area-inset-top, 0);
 }
 
     </style>
@@ -7119,6 +7130,22 @@ if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./sw.js')
         .then(reg => console.log('SW enregistre:', reg.scope))
         .catch(err => console.warn('SW erreur:', err));
+}
+
+// Controle quota stockage (avertissement Safari iOS ~50MB)
+if (navigator.storage && navigator.storage.estimate) {
+    navigator.storage.estimate().then(est => {
+        const usedMB = (est.usage / 1024 / 1024).toFixed(1);
+        const quotaMB = (est.quota / 1024 / 1024).toFixed(0);
+        const pct = ((est.usage / est.quota) * 100).toFixed(1);
+        console.log(`Stockage: ${usedMB} MB / ${quotaMB} MB (${pct}%)`);
+        if (est.usage / est.quota > 0.8) {
+            console.warn('Stockage presque plein (' + pct + '%) - pensez a exporter et supprimer les anciennes VMC');
+            if (typeof showToast === 'function') {
+                showToast('Stockage local a ' + pct + '% - exportez vos donnees', 'warning');
+            }
+        }
+    }).catch(() => {});
 }
 
 // Indicateur de version visible (petit badge en bas a droite)
