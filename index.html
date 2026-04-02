@@ -4880,17 +4880,17 @@ const VmcFormPage = {
             <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center">
                 <span>📷 Photos terrain <span class="badge bg-secondary" id="photo-count">0</span></span>
                 <div class="d-flex gap-1">
-                    <label class="btn btn-sm btn-outline-primary mb-0" for="photo-capture">
+                    <label class="btn btn-sm btn-outline-primary mb-0" for="photo-capture" role="button" style="touch-action:manipulation;min-height:44px;min-width:44px;display:inline-flex;align-items:center;justify-content:center" onclick="document.getElementById('photo-capture').click()">
                         📷 Photo
                     </label>
-                    <label class="btn btn-sm btn-outline-secondary mb-0" for="photo-gallery">
+                    <label class="btn btn-sm btn-outline-secondary mb-0" for="photo-gallery" role="button" style="touch-action:manipulation;min-height:44px;min-width:44px;display:inline-flex;align-items:center;justify-content:center" onclick="document.getElementById('photo-gallery').click()">
                         🖼️ Galerie
                     </label>
                 </div>
             </div>
             <div class="card-body">
-                <input type="file" accept="image/*" capture="environment" class="d-none" id="photo-capture">
-                <input type="file" accept="image/*" multiple class="d-none" id="photo-gallery">
+                <input type="file" accept="image/*" capture="environment" id="photo-capture" style="position:absolute;width:0;height:0;opacity:0;overflow:hidden;pointer-events:none">
+                <input type="file" accept="image/*" multiple id="photo-gallery" style="position:absolute;width:0;height:0;opacity:0;overflow:hidden;pointer-events:none">
                 <div id="photo-grid" class="d-flex flex-wrap gap-2"></div>
                 <div id="photo-empty" class="text-center text-muted small py-3">
                     <span style="font-size:1.5rem">📷</span>
