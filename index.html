@@ -7217,6 +7217,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     console.log('VMCManager: conducteur ajoute -', c.nom);
                 }
             }
+            // Toujours injecter les grilles manquantes (meme si donnees deja chargees)
+            await _ensureGrilleTypes();
         })
         .then(async () => {
             if (window._vmcAppLoaded) window._vmcAppLoaded();
