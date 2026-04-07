@@ -2952,6 +2952,8 @@ const DataSync = {
 
         this._dirty = false;
         this._updateBadge(false);
+        // Re-injecter les grilles manquantes apres sync distant
+        try { await _ensureGrilleTypes(); } catch(e) { console.warn('ensureGrille post-sync:', e); }
     },
 
     /* ================================================================
