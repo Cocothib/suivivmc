@@ -2186,6 +2186,81 @@ async function ensureSeed() {
             }
         }
     }
+    // Toujours verifier les grilles manquantes (base neuve OU existante)
+    await _ensureGrilleTypes();
+}
+
+async function _ensureGrilleTypes() {
+    const REQUIRED = [
+        { id: 'audit_qse_chantier', label: 'Audit QSE Chantier' }
+    ];
+    const TPL = {
+        audit_qse_chantier: [
+            { categorie: 'Gestion des déchets', item: 'Le tri des déchets est effectif sur le chantier (5 flux : carton, métal, plastique, bois, DIB)' },
+            { categorie: 'Gestion des déchets', item: 'Les bennes/zones de tri sont identifiées et étiquetées' },
+            { categorie: 'Gestion des déchets', item: 'Les déchets dangereux sont séparés (aérosols, souillés, solvants) avec rétention' },
+            { categorie: 'Gestion des déchets', item: 'Les panneaux PV cassés/défectueux sont stockés à part (filière SOREN)' },
+            { categorie: 'Gestion des déchets', item: 'Les câbles électriques usagés sont triés séparément' },
+            { categorie: 'Gestion des déchets', item: 'Les bordereaux de suivi des déchets (BSD) sont renseignés pour les DD' },
+            { categorie: 'Gestion des déchets', item: "Le CDT connaît la filière d'évacuation des déchets du chantier" },
+            { categorie: 'Gestion des déchets', item: 'Les emballages (palettes, cartons, films plastique) sont triés' },
+            { categorie: 'Produits chimiques et pollution', item: 'Les FDS sont disponibles sur le chantier pour les produits utilisés' },
+            { categorie: 'Produits chimiques et pollution', item: 'Les produits chimiques sont stockés sur rétention' },
+            { categorie: 'Produits chimiques et pollution', item: "L'étiquetage CLP est conforme sur les contenants (pictogrammes visibles)" },
+            { categorie: 'Produits chimiques et pollution', item: 'Un kit anti-pollution est présent dans le(s) véhicule(s) et complet' },
+            { categorie: 'Produits chimiques et pollution', item: 'Absence de traces de déversement ou pollution au sol' },
+            { categorie: 'Sensibilisation environnementale', item: "Les opérateurs connaissent la politique environnementale d'AGRIWATT" },
+            { categorie: 'Sensibilisation environnementale', item: 'Les opérateurs connaissent les aspects env. significatifs de leur activité (déchets, bruit, sols)' },
+            { categorie: 'Sensibilisation environnementale', item: 'Les opérateurs savent quoi faire en cas de déversement accidentel' },
+            { categorie: 'Sensibilisation environnementale', item: 'Les consignes environnementales ont été communiquées en début de chantier' },
+            { categorie: 'Sensibilisation environnementale', item: 'Les sous-traitants présents sont sensibilisés aux exigences environnementales' },
+            { categorie: 'Sensibilisation environnementale', item: 'Un affichage environnemental est visible sur le chantier (tri, urgence, contacts)' },
+            { categorie: 'Maîtrise opérationnelle', item: 'Le PDP intègre les aspects environnementaux' },
+            { categorie: 'Maîtrise opérationnelle', item: 'Les zones de stockage matériaux sont organisées (pas de risque envol/ruissellement)' },
+            { categorie: 'Maîtrise opérationnelle', item: 'Les véhicules/engins sont stationnés sur zone prévue (pas de fuite sur sol)' },
+            { categorie: 'Maîtrise opérationnelle', item: 'Le bruit du chantier est maîtrisé (horaires respectés, voisinage informé)' },
+            { categorie: 'Maîtrise opérationnelle', item: "Les accès/cheminements limitent l'impact sur la végétation et le milieu" },
+            { categorie: 'Maîtrise opérationnelle', item: 'Les poussières et émissions sont contrôlées' },
+            { categorie: 'Maîtrise opérationnelle', item: 'La signalisation de chantier est en place (panneaux, balisage)' },
+            { categorie: "Situations d'urgence", item: "La procédure d'urgence environnementale (PRC 12.1) est connue du CDT" },
+            { categorie: "Situations d'urgence", item: "Les numéros d'urgence sont affichés (pompiers, DREAL, pollution)" },
+            { categorie: "Situations d'urgence", item: 'Un extincteur est disponible, accessible et vérifié (date VGP)' },
+            { categorie: "Situations d'urgence", item: "Le CDT connaît la conduite à tenir en cas de découverte d'amiante" },
+            { categorie: "Situations d'urgence", item: 'Le CDT et les opérateurs connaissent la procédure STOP TRAVAUX' },
+            { categorie: 'Sécurité terrain', item: 'Port des EPI obligatoires vérifié (casque, harnais, chaussures, gants, lunettes)' },
+            { categorie: 'Sécurité terrain', item: 'Protections collectives en place (filets, garde-corps, balisage toiture)' },
+            { categorie: 'Sécurité terrain', item: 'Habilitations électriques à jour et adaptées (B2V/BR/BC/BP)' },
+            { categorie: 'Sécurité terrain', item: 'Autorisation de conduite / CACES valide pour les engins utilisés' },
+            { categorie: 'Sécurité terrain', item: 'Plan de prévention signé et connu des intervenants' },
+            { categorie: 'Sécurité terrain', item: 'Permis de feu établi si travaux par point chaud (soudure, meulage)' },
+            { categorie: 'Sécurité terrain', item: 'Connaissance et respect de la procédure de consignation (5 étapes)' },
+            { categorie: 'Conformité documentaire', item: "Autorisation d'urbanisme (DP ou PC) présente dans le dossier chantier" },
+            { categorie: 'Conformité documentaire', item: 'Dossier chantier complet et accessible (PDP, plans, habilitations)' },
+            { categorie: 'Conformité documentaire', item: 'Attestation Consuel prévue / en cours' },
+            { categorie: 'Conformité documentaire', item: 'Les incidents, accidents ou plaintes environnementales sont enregistrés et remontés' }
+        ]
+    };
+    try {
+        let types = await DB.getConfig('grille_types') || [];
+        let changed = false;
+        for (const rg of REQUIRED) {
+            if (!types.find(t => t.id === rg.id)) {
+                types.push({ id: rg.id, label: rg.label });
+                changed = true;
+                console.log('VMCManager: grille type ajoutee -', rg.label);
+            }
+            const existing = await DB.getConfig('grille_template_' + rg.id);
+            if (!existing || existing.length === 0) {
+                if (TPL[rg.id]) {
+                    await DB.setConfig('grille_template_' + rg.id, TPL[rg.id]);
+                    console.log('VMCManager: template injectee -', rg.id, '(' + TPL[rg.id].length + ' items)');
+                }
+            }
+        }
+        if (changed) await DB.setConfig('grille_types', types);
+    } catch (e) {
+        console.error('VMCManager: erreur injection grilles -', e);
+    }
 }
 
 /* ---------- Helpers generiques ---------- */
