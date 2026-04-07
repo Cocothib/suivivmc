@@ -2251,12 +2251,12 @@ async function _ensureGrilleTypes() {
             const existing = await DB.getConfig('grille_template_' + rg.id);
             if (!existing || existing.length === 0) {
                 if (TPL[rg.id]) {
-                    await DB.setConfig('grille_template_' + rg.id, TPL[rg.id]);
+                    await db.config.put({ id: 'grille_template_' + rg.id, value: TPL[rg.id] });
                     console.log('VMCManager: template injectee -', rg.id, '(' + TPL[rg.id].length + ' items)');
                 }
             }
         }
-        if (changed) await DB.setConfig('grille_types', types);
+        if (changed) await db.config.put({ id: 'grille_types', value: types });
     } catch (e) {
         console.error('VMCManager: erreur injection grilles -', e);
     }
@@ -2952,14 +2952,15 @@ const DataSync = {
 
         this._dirty = false;
         this._updateBadge(false);
-        // Re-injecter les grilles manquantes apres sync distant
-        try { await _ensureGrilleTypes(); } catch(e) { console.warn('ensureGrille post-sync:', e); }
+
     },
 
     /* ================================================================
        Sauvegarde vers SharePoint (Graph API)
        ================================================================ */
     async _collectData() {
+        // S'assurer que les grilles sont dans la config avant de sauvegarder
+        await _ensureGrilleTypes();
         const conducteurs = await db.conducteurs.toArray();
         const visites     = await db.visites.toArray();
         const vmcs        = await db.vmcs.toArray();
