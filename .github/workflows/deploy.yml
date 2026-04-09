@@ -1,7 +1,9 @@
 name: Deploy to OVH
+
   on:
     push:
-      branches: [main]
+      branches:
+        - main
 
   jobs:
     deploy:
