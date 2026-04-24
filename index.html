@@ -2687,8 +2687,10 @@ const VMC_CONFIG = {
 let _msalInstance = null;
 let _msalAccount  = null;
 
-/* Detecter mobile : popups bloquees → utiliser redirect */
-const _isMobile = /Android|iPhone|iPad|iPod|Opera Mini|IEMobile/i.test(navigator.userAgent);
+/* Detecter mobile : popups bloquees → utiliser redirect.
+   iPadOS 13+ renvoie un UA "Macintosh" : detecter via maxTouchPoints. */
+const _isMobile = /Android|iPhone|iPad|iPod|Opera Mini|IEMobile/i.test(navigator.userAgent)
+    || (navigator.maxTouchPoints > 1 && /Mac/.test(navigator.userAgent));
 
 async function _initMSAL() {
     if (_msalInstance) return _msalInstance;
@@ -2700,7 +2702,10 @@ async function _initMSAL() {
         },
         cache: {
             cacheLocation: 'localStorage',
-            storeAuthStateInCookie: false,
+            // Requis pour Safari iOS : ITP (Intelligent Tracking Prevention)
+            // purge periodiquement le localStorage, le cookie sert de secours
+            // pour le state MSAL entre deux redirects.
+            storeAuthStateInCookie: true,
         }
     };
     _msalInstance = new msal.PublicClientApplication(config);
