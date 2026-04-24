@@ -2295,8 +2295,22 @@ const DB = {
         return items;
     },
     getVmc(id)               { return db.vmcs.get(id); },
-    putVmc(data)             { data.updatedAt = data.updatedAt || new Date().toISOString(); return db.vmcs.put(data).then(r => { DataSync.markDirty(); return r; }); },
-    deleteVmc(id)            { return db.vmcs.delete(id).then(r => { DataSync.markDirty(); return r; }); },
+    putVmc(data)             {
+        data.updatedAt = data.updatedAt || new Date().toISOString();
+        const wasNew = !data.id;
+        return db.vmcs.put(data).then(r => {
+            DataSync.markDirty();
+            if (typeof ActivityLog !== 'undefined') ActivityLog.log(wasNew ? 'vmc.create' : 'vmc.update', { id: r || data.id, conducteurId: data.conducteurId, date: data.date, type: data.type });
+            return r;
+        });
+    },
+    deleteVmc(id)            {
+        return db.vmcs.delete(id).then(r => {
+            DataSync.markDirty();
+            if (typeof ActivityLog !== 'undefined') ActivityLog.log('vmc.delete', { id });
+            return r;
+        });
+    },
 
     /* --- Actions --- */
     async getActions(filters = {}) {
@@ -2308,8 +2322,21 @@ const DB = {
         return items;
     },
     getAction(id)            { return db.actions.get(id); },
-    putAction(data)          { return db.actions.put(data).then(r => { DataSync.markDirty(); return r; }); },
-    deleteAction(id)         { return db.actions.delete(id).then(r => { DataSync.markDirty(); return r; }); },
+    putAction(data)          {
+        const wasNew = !data.id;
+        return db.actions.put(data).then(r => {
+            DataSync.markDirty();
+            if (typeof ActivityLog !== 'undefined') ActivityLog.log(wasNew ? 'action.create' : 'action.update', { id: r || data.id, vmcId: data.vmcId, statut: data.statut });
+            return r;
+        });
+    },
+    deleteAction(id)         {
+        return db.actions.delete(id).then(r => {
+            DataSync.markDirty();
+            if (typeof ActivityLog !== 'undefined') ActivityLog.log('action.delete', { id });
+            return r;
+        });
+    },
 
     /* --- Config --- */
     async getConfig(key) {
@@ -2657,6 +2684,7 @@ const VMC_CONFIG = {
     SHAREPOINT_SITE_PATH: '/sites/QHSE',                    // le site SharePoint cible
     DATA_FOLDER_PATH:     'Documents/SuiviVMC',             // chemin dans la bibliotheque
     DATA_FILE_NAME:       'vmc-data.json',                   // nom du fichier de donnees
+    ACTIVITY_LOG_FILE:    'Documents/SuiviVMC/activity-log.json', // journal d'activite
     PRESENCE_FOLDER:      'Documents/SuiviVMC/.presence',    // dossier presence
 
     // Scopes Graph API
@@ -3168,6 +3196,7 @@ const DataSync = {
             // Les donnees distantes en attente sont desormais integrees au merge
             this._pendingRemoteData = null;
             this._pendingNotified = false;
+            if (typeof ActivityLog !== 'undefined') ActivityLog.log('sauvegarde', { version: data._meta.version, merged: remoteVersion > lastSyncedVersion });
             console.log('DataSync: sauvegarde SharePoint OK (v' + data._meta.version + ')');
         } catch (e) {
             console.error('DataSync: erreur sauvegarde SharePoint', e);
@@ -3242,6 +3271,7 @@ const DataSync = {
             }
             this.registerPresence();
             showToast('Connecté à SharePoint — ' + (_msalAccount.name || 'utilisateur'));
+            if (typeof ActivityLog !== 'undefined') ActivityLog.log('connexion', { compte: _msalAccount.name || '' });
             return true;
         } catch (e) {
             if (e.errorCode === 'user_cancelled') return false;
@@ -3543,6 +3573,131 @@ const DataSync = {
     },
 };
 
+/* ==============================================================
+   ActivityLog – Journal des connexions, sauvegardes et modifications
+   ============================================================== */
+const ActivityLog = {
+    MAX_EVENTS: 5000,
+    _queue: [],
+    _flushTimer: null,
+    _flushing: false,
+
+    log(action, details = {}) {
+        if (!DataSync._connected) return;
+        this._queue.push({
+            ts: new Date().toISOString(),
+            user: DataSync.getUserName() || 'inconnu',
+            action,
+            details
+        });
+        clearTimeout(this._flushTimer);
+        this._flushTimer = setTimeout(() => this._flush(), 2000);
+    },
+
+    async _flush() {
+        if (this._flushing || !this._queue.length || !DataSync._connected) return;
+        this._flushing = true;
+        const batch = this._queue.splice(0);
+        try {
+            let current;
+            try { current = await _readJsonFile(VMC_CONFIG.ACTIVITY_LOG_FILE); } catch { current = null; }
+            if (!current || !Array.isArray(current.events)) current = { events: [] };
+            current.events = current.events.concat(batch);
+            if (current.events.length > this.MAX_EVENTS) {
+                current.events = current.events.slice(-this.MAX_EVENTS);
+            }
+            await _writeJsonFile(VMC_CONFIG.ACTIVITY_LOG_FILE, current);
+        } catch (e) {
+            this._queue.unshift(...batch);
+            console.warn('ActivityLog: flush echoue', e);
+        } finally {
+            this._flushing = false;
+        }
+    },
+
+    async fetchRecent(limit = 200) {
+        try {
+            const data = await _readJsonFile(VMC_CONFIG.ACTIVITY_LOG_FILE);
+            const events = (data?.events || []).slice(-limit).reverse();
+            return events;
+        } catch { return []; }
+    },
+
+    async exportCSV() {
+        try {
+            const data = await _readJsonFile(VMC_CONFIG.ACTIVITY_LOG_FILE);
+            const events = data?.events || [];
+            const escCsv = s => `"${String(s).replace(/"/g,'""')}"`;
+            const lines = ['date;utilisateur;action;details'];
+            for (const e of events) {
+                const details = e.details ? JSON.stringify(e.details) : '';
+                lines.push([escCsv(e.ts), escCsv(e.user), escCsv(e.action), escCsv(details)].join(';'));
+            }
+            const blob = new Blob(['﻿' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `activity-log-suivivmc-${new Date().toISOString().slice(0,10)}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+        } catch (e) {
+            showToast('Erreur export CSV', 'danger');
+        }
+    },
+
+    _fmtDetails(d) {
+        if (!d || typeof d !== 'object') return '';
+        const pairs = Object.entries(d).filter(([,v]) => v != null && v !== '');
+        if (!pairs.length) return '';
+        return pairs.map(([k,v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`).join(', ');
+    },
+
+    async render(container) {
+        if (!container) return;
+        if (!DataSync._connected) {
+            container.innerHTML = '<p class="text-muted small mb-0">☁️ Connectez-vous à SharePoint pour consulter le journal.</p>';
+            return;
+        }
+        container.innerHTML = '<p class="text-muted small mb-0">⌛ Chargement du journal…</p>';
+        const events = await this.fetchRecent(200);
+        if (!events.length) {
+            container.innerHTML = '<p class="text-muted small mb-0">Aucun événement dans le journal.</p>';
+            return;
+        }
+        const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        const rows = events.map(e => {
+            const dt = new Date(e.ts).toLocaleString('fr-FR');
+            return `<tr>
+                <td class="small text-nowrap">${esc(dt)}</td>
+                <td class="small">${esc(e.user)}</td>
+                <td><span class="badge bg-secondary text-nowrap">${esc(e.action)}</span></td>
+                <td class="small text-muted">${esc(this._fmtDetails(e.details))}</td>
+            </tr>`;
+        }).join('');
+        container.innerHTML = `
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <span class="small text-muted">${events.length} derniers événements</span>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-sm btn-outline-secondary" id="btn-activity-refresh">↻</button>
+                    <button class="btn btn-sm btn-outline-primary" id="btn-activity-csv">⬇ CSV</button>
+                </div>
+            </div>
+            <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+                <table class="table table-sm table-hover small mb-0">
+                    <thead class="table-light sticky-top"><tr><th>Date</th><th>Utilisateur</th><th>Action</th><th>Détails</th></tr></thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>
+        `;
+        container.querySelector('#btn-activity-refresh').onclick = () => this.render(container);
+        container.querySelector('#btn-activity-csv').onclick = () => this.exportCSV();
+    }
+};
+
+window.addEventListener('beforeunload', () => {
+    if (ActivityLog._queue.length) ActivityLog._flush();
+});
+
 </script>
 
 
@@ -3573,6 +3728,7 @@ const ConfigPage = {
             <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-grille">Grille de contrôle</a></li>
             <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-email">Modèle email</a></li>
             <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-donnees">Données</a></li>
+            <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-journal">Journal</a></li>
         </ul>
 
         <div class="tab-content">
@@ -3798,6 +3954,15 @@ const ConfigPage = {
                     <button class="btn btn-outline-danger btn-sm" id="btn-reset-db">\u{1F5D1} Reinitialiser la base locale</button>
                 </div></div>
             </div>
+
+            <!-- Journal -->
+            <div class="tab-pane fade" id="tab-journal">
+                <div class="card"><div class="card-body">
+                    <h6>\u{1F4DC} Journal d'activité</h6>
+                    <p class="text-muted small">Historique des connexions, sauvegardes et modifications par les utilisateurs (5000 derniers événements).</p>
+                    <div id="activity-log-container"></div>
+                </div></div>
+            </div>
         </div>`;
 
         this._bindEntreprise(entreprise);
@@ -3805,6 +3970,15 @@ const ConfigPage = {
         this._renderGrilleTypes(grilleTypes);
         this._bindEmailTemplate(emailTpl);
         this._bindDonnees();
+        this._bindActivityLog();
+    },
+
+    _bindActivityLog() {
+        const tab = document.querySelector('a[href="#tab-journal"]');
+        if (!tab) return;
+        const load = () => ActivityLog.render(document.getElementById('activity-log-container'));
+        tab.addEventListener('shown.bs.tab', load);
+        if (tab.classList.contains('active')) load();
     },
 
     /* --- Entreprise --- */
