@@ -2832,6 +2832,9 @@ const DataSync = {
     _pollTimer: null,
     _presenceTimer: null,
     _hasOtherUsers: false,
+    _pendingRemoteData: null,   // donnees distantes differees (saisie en cours)
+    _pendingNotified: false,    // evite les toasts repetitifs pendant la saisie
+    _loadedSnapshot: null,      // JSON snapshot des donnees au dernier sync (pour merge)
     _originalHtmlSource: null,  // conserve pour compat
 
     // Propriete de compatibilite : le code existant teste if (DataSync._dirHandle)
@@ -2952,7 +2955,147 @@ const DataSync = {
 
         this._dirty = false;
         this._updateBadge(false);
+        await this._captureSnapshot();
+    },
 
+    /* ================================================================
+       Snapshot & merge – eviter les pertes en cas de saisie concurrente
+       ================================================================ */
+    async _collectRawData() {
+        return {
+            conducteurs: await db.conducteurs.toArray(),
+            visites:     await db.visites.toArray(),
+            vmcs:        await db.vmcs.toArray(),
+            actions:     await db.actions.toArray(),
+            config:      await db.config.toArray()
+        };
+    },
+
+    async _captureSnapshot() {
+        try {
+            const raw = await this._collectRawData();
+            this._loadedSnapshot = JSON.stringify(raw);
+        } catch (e) {
+            console.warn('DataSync: impossible de capturer le snapshot', e);
+            this._loadedSnapshot = null;
+        }
+    },
+
+    async _writeLocalData(data) {
+        await db.transaction('rw', db.conducteurs, db.visites, db.vmcs, db.actions, db.config, async () => {
+            await db.conducteurs.clear();
+            await db.visites.clear();
+            await db.vmcs.clear();
+            await db.actions.clear();
+            await db.config.clear();
+            if (data.conducteurs?.length) await db.conducteurs.bulkPut(data.conducteurs);
+            if (data.visites?.length)     await db.visites.bulkPut(data.visites);
+            if (data.vmcs?.length)        await db.vmcs.bulkPut(data.vmcs);
+            if (data.actions?.length)     await db.actions.bulkPut(data.actions);
+            if (data.config?.length)      await db.config.bulkPut(data.config);
+        });
+    },
+
+    /**
+     * Fusionne les donnees distantes avec les modifications locales faites
+     * depuis le dernier snapshot. Retourne l'objet fusionne (a ecrire a la fois
+     * en local et sur SharePoint). Remappe les ids auto-increment en collision
+     * pour ne perdre aucune entree creee simultanement par plusieurs users.
+     */
+    async _mergeWithRemote(remoteData) {
+        const current = await this._collectRawData();
+        let snapshot;
+        try {
+            snapshot = this._loadedSnapshot ? JSON.parse(this._loadedSnapshot)
+                : { conducteurs: [], visites: [], vmcs: [], actions: [], config: [] };
+        } catch {
+            snapshot = { conducteurs: [], visites: [], vmcs: [], actions: [], config: [] };
+        }
+
+        const merged = {
+            _meta: remoteData._meta,
+            conducteurs: [...(remoteData.conducteurs || [])],
+            visites:     [...(remoteData.visites     || [])],
+            vmcs:        [...(remoteData.vmcs        || [])],
+            actions:     [...(remoteData.actions     || [])],
+            config:      [...(remoteData.config      || [])]
+        };
+
+        const autoIdStores = new Set(['vmcs', 'actions', 'visites']);
+        const remap = { vmcs: {}, actions: {}, visites: {}, conducteurs: {} };
+        const stores = ['conducteurs', 'visites', 'vmcs', 'actions', 'config'];
+
+        for (const store of stores) {
+            const curArr  = current[store]  || [];
+            const snapArr = snapshot[store] || [];
+            const remoteById = new Map(merged[store].map(e => [e.id, e]));
+            const snapById   = new Map(snapArr.map(e => [e.id, e]));
+            const curById    = new Map(curArr.map(e => [e.id, e]));
+
+            const localAdded = [];
+            const localUpdated = [];
+            const localDeletedIds = [];
+
+            for (const [id, entry] of curById) {
+                const snap = snapById.get(id);
+                if (!snap) localAdded.push(entry);
+                else if (JSON.stringify(snap) !== JSON.stringify(entry)) localUpdated.push(entry);
+            }
+            for (const id of snapById.keys()) {
+                if (!curById.has(id)) localDeletedIds.push(id);
+            }
+
+            for (const id of localDeletedIds) remoteById.delete(id);
+
+            for (const entry of localUpdated) {
+                if (remoteById.has(entry.id)) {
+                    remoteById.set(entry.id, entry);
+                } else {
+                    localAdded.push(entry);
+                }
+            }
+
+            let nextId = 1;
+            for (const id of remoteById.keys()) {
+                if (typeof id === 'number' && id >= nextId) nextId = id + 1;
+            }
+            for (const entry of localAdded) {
+                const newEntry = { ...entry };
+                if (autoIdStores.has(store) && remoteById.has(newEntry.id)) {
+                    const oldId = newEntry.id;
+                    while (remoteById.has(nextId)) nextId++;
+                    newEntry.id = nextId++;
+                    remap[store][oldId] = newEntry.id;
+                }
+                remoteById.set(newEntry.id, newEntry);
+            }
+
+            merged[store] = Array.from(remoteById.values());
+        }
+
+        // Propager les remappings aux references croisees
+        if (Object.keys(remap.vmcs).length) {
+            for (const a of merged.actions) {
+                if (a.vmcId != null && remap.vmcs[a.vmcId] != null) a.vmcId = remap.vmcs[a.vmcId];
+            }
+            for (const v of merged.visites) {
+                if (v.vmcId != null && remap.vmcs[v.vmcId] != null) v.vmcId = remap.vmcs[v.vmcId];
+            }
+        }
+        if (Object.keys(remap.conducteurs).length) {
+            for (const v of merged.vmcs) {
+                if (v.conducteurId != null && remap.conducteurs[v.conducteurId] != null) {
+                    v.conducteurId = remap.conducteurs[v.conducteurId];
+                }
+            }
+            for (const vi of merged.visites) {
+                if (vi.conducteurId != null && remap.conducteurs[vi.conducteurId] != null) {
+                    vi.conducteurId = remap.conducteurs[vi.conducteurId];
+                }
+            }
+        }
+
+        return merged;
     },
 
     /* ================================================================
@@ -2986,15 +3129,40 @@ const DataSync = {
 
         this._saving = true;
         try {
-            const data = await this._collectData();
             const filePath = `${VMC_CONFIG.DATA_FOLDER_PATH}/${VMC_CONFIG.DATA_FILE_NAME}`;
+
+            // 1. Relire le fichier distant pour detecter une version concurrente
+            let remoteData = null;
+            try { remoteData = await _readJsonFile(filePath); } catch { /* offline ou absent */ }
+
+            const remoteVersion     = remoteData?._meta?.version || 0;
+            const lastSyncedVersion = this._loadedMeta?.version  || 0;
+
+            // 2. Si un autre utilisateur a sauvegarde entre-temps : fusionner
+            let baseVersion = lastSyncedVersion;
+            if (remoteData && remoteVersion > lastSyncedVersion) {
+                console.log(`DataSync: fusion (remote v${remoteVersion} vs local v${lastSyncedVersion})`);
+                const merged = await this._mergeWithRemote(remoteData);
+                await this._writeLocalData(merged);
+                baseVersion = remoteVersion;
+                const savedBy = remoteData._meta?.savedBy || 'un autre utilisateur';
+                showToast(`Fusion avec les données de ${savedBy}`, 'info');
+            }
+
+            // 3. Collecter les donnees locales (post-merge) et sauvegarder
+            const data = await this._collectData();
+            data._meta.version = baseVersion + 1;
+
             await _writeJsonFile(filePath, data);
             this._loadedMeta = data._meta;
             this._lastSavedAt = data._meta.lastSaved;
             this._dirty = false;
             this._updateBadge(false);
-            // Persister le meta dans IndexedDB pour que load() le retrouve
             await db.config.put({ id: '_syncMeta', value: data._meta });
+            await this._captureSnapshot();
+            // Les donnees distantes en attente sont desormais integrees au merge
+            this._pendingRemoteData = null;
+            this._pendingNotified = false;
             console.log('DataSync: sauvegarde SharePoint OK (v' + data._meta.version + ')');
         } catch (e) {
             console.error('DataSync: erreur sauvegarde SharePoint', e);
@@ -3098,6 +3266,17 @@ const DataSync = {
                 const localVersion  = this._loadedMeta?.version || 0;
 
                 if (remoteVersion > localVersion) {
+                    // Si l'utilisateur est en train de saisir une VMC, differer
+                    // l'application pour ne pas reinitialiser son formulaire.
+                    if (this._isUserEditing()) {
+                        this._pendingRemoteData = data;
+                        if (!this._pendingNotified) {
+                            const user = data._meta.savedBy || 'quelqu\'un';
+                            showToast(`Nouvelles données de ${user} — appliquées après votre saisie`, 'info');
+                            this._pendingNotified = true;
+                        }
+                        return;
+                    }
                     console.log(`DataSync: nouvelle version detectee (${localVersion} → ${remoteVersion})`);
                     await this._applyRemoteData(data);
                     // Rafraichir la page courante
@@ -3162,6 +3341,31 @@ const DataSync = {
             const myName = this.getUserName();
             return users.filter(u => u.user !== myName);
         } catch { return []; }
+    },
+
+    /* ================================================================
+       Saisie en cours – eviter les resets pendant qu'on remplit un formulaire
+       ================================================================ */
+    _isUserEditing() {
+        const hash = (location.hash || '').slice(1);
+        return hash.startsWith('vmc-new') || hash.startsWith('vmc-edit');
+    },
+
+    async _applyPendingIfAny() {
+        if (!this._pendingRemoteData) return false;
+        if (this._isUserEditing()) return false;
+        const data = this._pendingRemoteData;
+        this._pendingRemoteData = null;
+        this._pendingNotified = false;
+        try {
+            await this._applyRemoteData(data);
+            const user = data._meta?.savedBy || 'quelqu\'un';
+            showToast(`Données mises à jour par ${user}`, 'info');
+            return true;
+        } catch (e) {
+            console.error('DataSync: erreur application donnees differees', e);
+            return false;
+        }
     },
 
     /* ================================================================
@@ -7096,6 +7300,12 @@ const App = {
         const page   = parts[0];
         const params = parts.slice(1);
 
+        // Si on quitte un formulaire VMC et qu'il y a des donnees distantes
+        // en attente (reçues pendant la saisie), les appliquer maintenant.
+        if (typeof DataSync !== 'undefined' && DataSync._applyPendingIfAny) {
+            await DataSync._applyPendingIfAny();
+        }
+
         const pageModule = this.pages[page];
         const container  = document.getElementById('app-content');
 
@@ -7229,6 +7439,8 @@ document.addEventListener('DOMContentLoaded', () => {
             await App._initSyncUI();
             DataSync.setupBeforeUnload();
             DataSync.startPolling();
+            // Capturer le snapshot initial si pas encore fait (offline, premier run, etc.)
+            if (!DataSync._loadedSnapshot) await DataSync._captureSnapshot();
 
             // Guide de premiere connexion
             if (DataSync.isFirstLaunch()) {
