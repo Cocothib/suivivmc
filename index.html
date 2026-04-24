@@ -3645,6 +3645,33 @@ const ActivityLog = {
         }
     },
 
+    async clear() {
+        if (!DataSync._connected) { showToast('Connectez-vous à SharePoint pour vider le journal', 'warning'); return false; }
+        if (!confirm('Vider tout le journal d\'activité ?\n\nCette action est irréversible. Un seul événement "journal.clear" sera conservé comme trace.')) return false;
+        try {
+            let purgedCount = 0;
+            try {
+                const current = await _readJsonFile(VMC_CONFIG.ACTIVITY_LOG_FILE);
+                purgedCount = current?.events?.length || 0;
+            } catch { /* fichier absent */ }
+            this._queue = [];
+            clearTimeout(this._flushTimer);
+            const clearEvent = {
+                ts: new Date().toISOString(),
+                user: DataSync.getUserName() || 'inconnu',
+                action: 'journal.clear',
+                details: { purgedCount }
+            };
+            await _writeJsonFile(VMC_CONFIG.ACTIVITY_LOG_FILE, { events: [clearEvent] });
+            showToast(`Journal vidé (${purgedCount} événements supprimés)`);
+            return true;
+        } catch (e) {
+            console.error('ActivityLog.clear:', e);
+            showToast('Erreur lors du vidage du journal', 'danger');
+            return false;
+        }
+    },
+
     _fmtDetails(d) {
         if (!d || typeof d !== 'object') return '';
         const pairs = Object.entries(d).filter(([,v]) => v != null && v !== '');
@@ -3680,6 +3707,7 @@ const ActivityLog = {
                 <div class="d-flex gap-2">
                     <button class="btn btn-sm btn-outline-secondary" id="btn-activity-refresh">↻</button>
                     <button class="btn btn-sm btn-outline-primary" id="btn-activity-csv">⬇ CSV</button>
+                    <button class="btn btn-sm btn-outline-danger" id="btn-activity-clear">🗑 Vider</button>
                 </div>
             </div>
             <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
@@ -3691,6 +3719,10 @@ const ActivityLog = {
         `;
         container.querySelector('#btn-activity-refresh').onclick = () => this.render(container);
         container.querySelector('#btn-activity-csv').onclick = () => this.exportCSV();
+        container.querySelector('#btn-activity-clear').onclick = async () => {
+            const ok = await this.clear();
+            if (ok) this.render(container);
+        };
     }
 };
 
