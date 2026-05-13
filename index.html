@@ -2804,19 +2804,52 @@ async function _readJsonFile(filePath) {
     const url = `https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${filePath}:/content`;
     const resp = await _graphFetch(url);
     if (resp.status === 404) return null;
-    if (!resp.ok) throw new Error('Erreur lecture fichier: ' + resp.status);
+    if (!resp.ok) {
+        const err = new Error('Erreur lecture fichier: ' + resp.status);
+        err.status = resp.status;
+        throw err;
+    }
     return resp.json();
 }
 
-async function _writeJsonFile(filePath, data) {
+// Variante avec ETag pour le verrouillage optimiste (If-Match a l'ecriture)
+async function _readJsonFileWithETag(filePath) {
     const driveId = await _getDriveId();
     const url = `https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${filePath}:/content`;
+    const resp = await _graphFetch(url);
+    if (resp.status === 404) return { data: null, eTag: null };
+    if (!resp.ok) {
+        const err = new Error('Erreur lecture fichier: ' + resp.status);
+        err.status = resp.status;
+        throw err;
+    }
+    const eTag = resp.headers.get('ETag') || resp.headers.get('etag') || null;
+    const data = await resp.json();
+    return { data, eTag };
+}
+
+async function _writeJsonFile(filePath, data, opts = {}) {
+    const driveId = await _getDriveId();
+    const url = `https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${filePath}:/content`;
+    const headers = { 'Content-Type': 'application/json' };
+    if (opts.ifMatch)     headers['If-Match']      = opts.ifMatch;
+    if (opts.ifNoneMatch) headers['If-None-Match'] = opts.ifNoneMatch;
     const resp = await _graphFetch(url, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(data)
     });
-    if (!resp.ok) throw new Error('Erreur ecriture fichier: ' + resp.status);
+    if (resp.status === 412) {
+        const err = new Error('Conflit de version (If-Match): le fichier a ete modifie entre-temps');
+        err.status = 412;
+        err.isPreconditionFailed = true;
+        throw err;
+    }
+    if (!resp.ok) {
+        const err = new Error('Erreur ecriture fichier: ' + resp.status);
+        err.status = resp.status;
+        throw err;
+    }
     return resp.json();
 }
 
@@ -3161,43 +3194,96 @@ const DataSync = {
         }
 
         this._saving = true;
+        const filePath = `${VMC_CONFIG.DATA_FOLDER_PATH}/${VMC_CONFIG.DATA_FILE_NAME}`;
+        const MAX_RETRIES = 3;
+        let attempt = 0;
         try {
-            const filePath = `${VMC_CONFIG.DATA_FOLDER_PATH}/${VMC_CONFIG.DATA_FILE_NAME}`;
+            while (true) {
+                attempt++;
 
-            // 1. Relire le fichier distant pour detecter une version concurrente
-            let remoteData = null;
-            try { remoteData = await _readJsonFile(filePath); } catch { /* offline ou absent */ }
+                // 1. Relire le fichier distant (avec son ETag) pour detecter une version concurrente
+                let remoteData = null;
+                let remoteETag = null;
+                let remoteReadFailed = false;
+                try {
+                    const { data, eTag } = await _readJsonFileWithETag(filePath);
+                    remoteData = data;
+                    remoteETag = eTag;
+                }
+                catch (readErr) {
+                    const status = readErr?.status || readErr?.statusCode || readErr?.response?.status;
+                    const msg    = String(readErr?.message || readErr || '');
+                    const isMissing = status === 404 || /not.?found|introuvable/i.test(msg);
+                    if (!isMissing) {
+                        remoteReadFailed = true;
+                        console.warn('DataSync: relecture distante echouee', readErr);
+                    }
+                }
 
-            const remoteVersion     = remoteData?._meta?.version || 0;
-            const lastSyncedVersion = this._loadedMeta?.version  || 0;
+                // GARDE-FOU : si la relecture a echoue ET qu'on avait deja synchronise une version >0,
+                // on refuse d'ecraser le fichier distant a l'aveugle.
+                if (remoteReadFailed && (this._loadedMeta?.version || 0) > 0) {
+                    console.error('DataSync: sauvegarde annulee (relecture distante impossible)');
+                    showToast('Sauvegarde reportée : impossible de relire le fichier distant. Réessai automatique.', 'warning');
+                    clearTimeout(this._saveTimer);
+                    this._saveTimer = setTimeout(() => this.save(), VMC_CONFIG.SAVE_DEBOUNCE_MS || 5000);
+                    return;
+                }
 
-            // 2. Si un autre utilisateur a sauvegarde entre-temps : fusionner
-            let baseVersion = lastSyncedVersion;
-            if (remoteData && remoteVersion > lastSyncedVersion) {
-                console.log(`DataSync: fusion (remote v${remoteVersion} vs local v${lastSyncedVersion})`);
-                const merged = await this._mergeWithRemote(remoteData);
-                await this._writeLocalData(merged);
-                baseVersion = remoteVersion;
-                const savedBy = remoteData._meta?.savedBy || 'un autre utilisateur';
-                showToast(`Fusion avec les données de ${savedBy}`, 'info');
+                const remoteVersion     = remoteData?._meta?.version || 0;
+                const lastSyncedVersion = this._loadedMeta?.version  || 0;
+
+                // 2. Si un autre utilisateur a sauvegarde entre-temps : fusionner
+                let baseVersion = lastSyncedVersion;
+                if (remoteData && remoteVersion > lastSyncedVersion) {
+                    console.log(`DataSync: fusion (remote v${remoteVersion} vs local v${lastSyncedVersion})`);
+                    const merged = await this._mergeWithRemote(remoteData);
+                    await this._writeLocalData(merged);
+                    baseVersion = remoteVersion;
+                    const savedBy = remoteData._meta?.savedBy || 'un autre utilisateur';
+                    showToast(`Fusion avec les données de ${savedBy}`, 'info');
+                }
+
+                // 3. Collecter les donnees locales (post-merge) et sauvegarder
+                const data = await this._collectData();
+                data._meta.version = baseVersion + 1;
+
+                // Verrouillage optimiste : If-Match sur l'ETag lu juste avant,
+                // ou If-None-Match: * si le fichier n'existait pas (creation only).
+                const writeOpts = {};
+                if (remoteETag) writeOpts.ifMatch = remoteETag;
+                else if (!remoteData) writeOpts.ifNoneMatch = '*';
+
+                try {
+                    await _writeJsonFile(filePath, data, writeOpts);
+                } catch (writeErr) {
+                    // 412 = quelqu'un d'autre a ecrit entre notre GET et notre PUT
+                    // → on rejoue le cycle merge + write (re-lecture forcee de l'ETag)
+                    if (writeErr?.isPreconditionFailed && attempt < MAX_RETRIES) {
+                        console.warn(`DataSync: conflit detecte (tentative ${attempt}/${MAX_RETRIES}), nouveau cycle de fusion`);
+                        // Forcer la re-detection au prochain tour : on ne touche pas _loadedMeta
+                        await new Promise(r => setTimeout(r, 200 + Math.random() * 400));
+                        continue;
+                    }
+                    if (writeErr?.isPreconditionFailed) {
+                        showToast('Conflit de sauvegarde persistant. Réessayez dans un instant.', 'warning');
+                    }
+                    throw writeErr;
+                }
+
+                // Sauvegarde reussie
+                this._loadedMeta = data._meta;
+                this._lastSavedAt = data._meta.lastSaved;
+                this._dirty = false;
+                this._updateBadge(false);
+                await db.config.put({ id: '_syncMeta', value: data._meta });
+                await this._captureSnapshot();
+                this._pendingRemoteData = null;
+                this._pendingNotified = false;
+                if (typeof ActivityLog !== 'undefined') ActivityLog.log('sauvegarde', { version: data._meta.version, merged: remoteVersion > lastSyncedVersion });
+                console.log(`DataSync: sauvegarde SharePoint OK (v${data._meta.version}, tentative ${attempt})`);
+                break;
             }
-
-            // 3. Collecter les donnees locales (post-merge) et sauvegarder
-            const data = await this._collectData();
-            data._meta.version = baseVersion + 1;
-
-            await _writeJsonFile(filePath, data);
-            this._loadedMeta = data._meta;
-            this._lastSavedAt = data._meta.lastSaved;
-            this._dirty = false;
-            this._updateBadge(false);
-            await db.config.put({ id: '_syncMeta', value: data._meta });
-            await this._captureSnapshot();
-            // Les donnees distantes en attente sont desormais integrees au merge
-            this._pendingRemoteData = null;
-            this._pendingNotified = false;
-            if (typeof ActivityLog !== 'undefined') ActivityLog.log('sauvegarde', { version: data._meta.version, merged: remoteVersion > lastSyncedVersion });
-            console.log('DataSync: sauvegarde SharePoint OK (v' + data._meta.version + ')');
         } catch (e) {
             console.error('DataSync: erreur sauvegarde SharePoint', e);
             showToast('Erreur de sauvegarde SharePoint. Les données sont conservées localement.', 'warning');
