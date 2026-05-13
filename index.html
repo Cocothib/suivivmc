@@ -5421,17 +5421,17 @@ const VmcFormPage = {
             <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center">
                 <span>📷 Photos terrain <span class="badge bg-secondary" id="photo-count">0</span></span>
                 <div class="d-flex gap-1">
-                    <label class="btn btn-sm btn-outline-primary mb-0" for="photo-capture" role="button" style="touch-action:manipulation;min-height:44px;min-width:44px;display:inline-flex;align-items:center;justify-content:center">
+                    <button type="button" class="btn btn-sm btn-outline-primary mb-0" id="btn-photo-capture" style="touch-action:manipulation;min-height:44px;min-width:44px;display:inline-flex;align-items:center;justify-content:center">
                         📷 Photo
-                    </label>
-                    <label class="btn btn-sm btn-outline-secondary mb-0" for="photo-gallery" role="button" style="touch-action:manipulation;min-height:44px;min-width:44px;display:inline-flex;align-items:center;justify-content:center">
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary mb-0" id="btn-photo-gallery" style="touch-action:manipulation;min-height:44px;min-width:44px;display:inline-flex;align-items:center;justify-content:center">
                         🖼️ Galerie
-                    </label>
+                    </button>
                 </div>
             </div>
             <div class="card-body">
-                <input type="file" accept="image/*" capture="environment" id="photo-capture" style="position:absolute;width:0;height:0;opacity:0;overflow:hidden;pointer-events:none">
-                <input type="file" accept="image/*" multiple id="photo-gallery" style="position:absolute;width:0;height:0;opacity:0;overflow:hidden;pointer-events:none">
+                <input type="file" accept="image/*" capture="environment" id="photo-capture" aria-hidden="true" tabindex="-1" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
+                <input type="file" accept="image/*" multiple id="photo-gallery" aria-hidden="true" tabindex="-1" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
                 <div id="photo-grid" class="d-flex flex-wrap gap-2"></div>
                 <div id="photo-empty" class="text-center text-muted small py-3">
                     <span style="font-size:1.5rem">📷</span>
@@ -5637,9 +5637,30 @@ const VmcFormPage = {
 
         const captureInput = document.getElementById('photo-capture');
         const galleryInput = document.getElementById('photo-gallery');
+        const captureBtn   = document.getElementById('btn-photo-capture');
+        const galleryBtn   = document.getElementById('btn-photo-gallery');
 
         captureInput.onchange = (e) => this._handlePhotoFiles(e.target.files);
         galleryInput.onchange = (e) => this._handlePhotoFiles(e.target.files);
+
+        // Pattern fiable cross-browser (Samsung Internet, iOS Safari, WebView Android):
+        // bouton declenche un click() programmatique sur l'input cache.
+        // Le pattern <label for> echoue silencieusement sur Samsung Internet en PWA installee.
+        const triggerClick = (input) => {
+            try {
+                input.click();
+            } catch (err) {
+                console.warn('Photo click() failed:', err);
+                showToast('Impossible d\'ouvrir le selecteur. Verifie les permissions camera dans les parametres du navigateur.', 'warning');
+            }
+        };
+
+        if (captureBtn) {
+            captureBtn.onclick = (e) => { e.preventDefault(); triggerClick(captureInput); };
+        }
+        if (galleryBtn) {
+            galleryBtn.onclick = (e) => { e.preventDefault(); triggerClick(galleryInput); };
+        }
 
         this._renderPhotos();
     },
