@@ -2191,8 +2191,7 @@ async function ensureSeed() {
 
 async function _ensureGrilleTypes() {
     const REQUIRED = [
-        { id: 'audit_qse_chantier', label: 'Audit QSE Chantier' },
-        { id: 'exercice_urgence',   label: "Exercice d'urgence" }
+        { id: 'audit_qse_chantier', label: 'Audit QSE Chantier' }
     ];
     // Catégories à garantir dans la grille "Exercice d'urgence" (ajoutées si absentes,
     // sans toucher aux catégories déjà saisies par l'utilisateur — modifiables ensuite via l'UI).
@@ -2223,9 +2222,6 @@ async function _ensureGrilleTypes() {
         }
     ];
     const TPL = {
-        exercice_urgence: URGENCE_CATEGORIES_MUST_HAVE.flatMap(c =>
-            c.items.map(item => ({ categorie: c.categorie, item }))
-        ),
         audit_qse_chantier: [
             { categorie: 'Gestion des déchets', item: 'Le tri des déchets est effectif sur le chantier (5 flux : carton, métal, plastique, bois, DIB)' },
             { categorie: 'Gestion des déchets', item: 'Les bennes/zones de tri sont identifiées et étiquetées' },
@@ -2288,11 +2284,44 @@ async function _ensureGrilleTypes() {
                 }
             }
         }
+        // Trouver la grille "Exercice d'urgence" existante par label normalisé
+        // (le slug peut être "exercice_d_urgence", "exercice_urgence", etc. selon comment
+        // elle a été créée). Si elle n'existe pas, on la crée avec le slug standard.
+        const normalize = s => (s || '').toLowerCase()
+            .normalize('NFD').replace(/[̀-ͯ]/g, '')
+            .replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+        const URGENCE_LABEL = "Exercice d'urgence";
+        const URGENCE_NORM  = normalize(URGENCE_LABEL);
+        let urgenceType = types.find(t => normalize(t.label) === URGENCE_NORM);
+        if (!urgenceType) {
+            urgenceType = { id: 'exercice_d_urgence', label: URGENCE_LABEL };
+            types.push(urgenceType);
+            changed = true;
+        }
+
+        // Nettoyage du doublon créé par la version précédente du seed (id='exercice_urgence')
+        // si ce doublon n'a pas la même id que la grille existante et qu'il ne contient que V1/V2.
+        const DUP_ID = 'exercice_urgence';
+        if (urgenceType.id !== DUP_ID) {
+            const dupIdx = types.findIndex(t => t.id === DUP_ID);
+            if (dupIdx >= 0) {
+                const dupContent = await DB.getConfig('grille_template_' + DUP_ID) || [];
+                const mustHaveCats = new Set(URGENCE_CATEGORIES_MUST_HAVE.map(c => c.categorie));
+                const onlyOurCats = dupContent.length === 0 ||
+                    dupContent.every(g => mustHaveCats.has(g.categorie));
+                if (onlyOurCats) {
+                    types.splice(dupIdx, 1);
+                    await db.config.delete('grille_template_' + DUP_ID);
+                    changed = true;
+                    console.log('VMCManager: doublon "exercice_urgence" supprimé');
+                }
+            }
+        }
+
         if (changed) await db.config.put({ id: 'grille_types', value: types });
 
-        // Merge non-destructif : ajouter les catégories V1/V2 si absentes de la grille existante.
-        // Ne touche pas aux catégories déjà saisies (ex: "Simulation de situation d'urgence").
-        const urgenceKey = 'grille_template_exercice_urgence';
+        // Merge non-destructif : ajouter les catégories V1/V2 si absentes de la grille cible.
+        const urgenceKey = 'grille_template_' + urgenceType.id;
         const current = await DB.getConfig(urgenceKey) || [];
         const existingCats = new Set(current.map(g => g.categorie));
         let merged = [...current];
@@ -2307,7 +2336,7 @@ async function _ensureGrilleTypes() {
         }
         if (appended > 0) {
             await db.config.put({ id: urgenceKey, value: merged });
-            console.log('VMCManager: ' + appended + ' catégorie(s) ajoutée(s) à "Exercice d\'urgence"');
+            console.log('VMCManager: ' + appended + ' catégorie(s) ajoutée(s) à "' + urgenceType.label + '" (' + urgenceType.id + ')');
         }
     } catch (e) {
         console.error('VMCManager: erreur injection grilles -', e);
