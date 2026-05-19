@@ -2193,34 +2193,6 @@ async function _ensureGrilleTypes() {
     const REQUIRED = [
         { id: 'audit_qse_chantier', label: 'Audit QSE Chantier' }
     ];
-    // Catégories à garantir dans la grille "Exercice d'urgence" (ajoutées si absentes,
-    // sans toucher aux catégories déjà saisies par l'utilisateur — modifiables ensuite via l'UI).
-    const URGENCE_CATEGORIES_MUST_HAVE = [
-        {
-            categorie: "V1 — Déversement huile hydraulique (nacelle/chariot)",
-            items: [
-                "Étape 1 — Alerter chef d'équipe + sécuriser zone (EPI, périmètre 3 m)",
-                "Étape 2 — Confiner avec boudin absorbant en aval de la fuite (sens d'écoulement, avaloirs)",
-                "Étape 3 — Absorber avec granulés/feuilles absorbantes jusqu'à disparition visible",
-                "Étape 4 — Collecter souillés en sac DD étanche → bac DID site + BSD",
-                "Évaluation — Temps de réaction < 5 min",
-                "Évaluation — Complétude du kit anti-pollution",
-                "Évaluation — Traçabilité du déchet (EN 12.X)"
-            ]
-        },
-        {
-            categorie: "V2 — Déversement carburant/gasoil (groupe électrogène, véhicule)",
-            items: [
-                "Étape 1 — Couper source (vanne, contact) + écarter sources d'ignition + EPI ATEX si volume > 5 L",
-                "Étape 2 — Obturer avaloirs proches (plaque/boudin) + confiner avec boudin absorbant hydrocarbures",
-                "Étape 3 — Absorber au granulé minéral (jamais sciure) + collecter en sac DD étiqueté",
-                "Étape 4 — Évacuer vers bac DID + BSD hydrocarbures",
-                "Évaluation — Réactivité",
-                "Évaluation — Maîtrise du risque incendie",
-                "Évaluation — Traçabilité (EN 12.X)"
-            ]
-        }
-    ];
     const TPL = {
         audit_qse_chantier: [
             { categorie: 'Gestion des déchets', item: 'Le tri des déchets est effectif sur le chantier (5 flux : carton, métal, plastique, bois, DIB)' },
@@ -2270,7 +2242,6 @@ async function _ensureGrilleTypes() {
     try {
         let types = await DB.getConfig('grille_types') || [];
         let changed = false;
-        let anythingAdded = false;
         for (const rg of REQUIRED) {
             if (!types.find(t => t.id === rg.id)) {
                 types.push({ id: rg.id, label: rg.label });
@@ -2281,80 +2252,13 @@ async function _ensureGrilleTypes() {
             if (!existing || existing.length === 0) {
                 if (TPL[rg.id]) {
                     await db.config.put({ id: 'grille_template_' + rg.id, value: TPL[rg.id] });
-                    anythingAdded = true;
                     console.log('VMCManager: template injectee -', rg.id, '(' + TPL[rg.id].length + ' items)');
                 }
             }
         }
-        // Injection unique des V1/V2 Exercice d'urgence : si déjà fait (flag stocké
-        // en config et synchronisé via SharePoint), on n'y touche plus — l'utilisateur
-        // peut alors renommer/supprimer librement les catégories V1/V2 sans qu'elles
-        // soient réinjectées.
-        const seedFlag = await DB.getConfig('urgence_v1v2_seeded');
-        if (!seedFlag) {
-            // Trouver la grille "Exercice d'urgence" existante par label normalisé
-            // (le slug peut être "exercice_d_urgence", "exercice_urgence", etc.).
-            const normalize = s => (s || '').toLowerCase()
-                .normalize('NFD').replace(/[̀-ͯ]/g, '')
-                .replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
-            const URGENCE_LABEL = "Exercice d'urgence";
-            const URGENCE_NORM  = normalize(URGENCE_LABEL);
-            let urgenceType = types.find(t => normalize(t.label) === URGENCE_NORM);
-            if (!urgenceType) {
-                urgenceType = { id: 'exercice_d_urgence', label: URGENCE_LABEL };
-                types.push(urgenceType);
-                changed = true;
-            }
-
-            // Nettoyage du doublon créé par une version précédente du seed (id='exercice_urgence')
-            const DUP_ID = 'exercice_urgence';
-            if (urgenceType.id !== DUP_ID) {
-                const dupIdx = types.findIndex(t => t.id === DUP_ID);
-                if (dupIdx >= 0) {
-                    const dupContent = await DB.getConfig('grille_template_' + DUP_ID) || [];
-                    const mustHaveCats = new Set(URGENCE_CATEGORIES_MUST_HAVE.map(c => c.categorie));
-                    const onlyOurCats = dupContent.length === 0 ||
-                        dupContent.every(g => mustHaveCats.has(g.categorie));
-                    if (onlyOurCats) {
-                        types.splice(dupIdx, 1);
-                        await db.config.delete('grille_template_' + DUP_ID);
-                        changed = true;
-                        console.log('VMCManager: doublon "exercice_urgence" supprimé');
-                    }
-                }
-            }
-
-            if (changed) await db.config.put({ id: 'grille_types', value: types });
-
-            // Merge non-destructif : ajouter les catégories V1/V2 si absentes.
-            const urgenceKey = 'grille_template_' + urgenceType.id;
-            const current = await DB.getConfig(urgenceKey) || [];
-            const existingCats = new Set(current.map(g => g.categorie));
-            let merged = [...current];
-            let appended = 0;
-            for (const cat of URGENCE_CATEGORIES_MUST_HAVE) {
-                if (!existingCats.has(cat.categorie)) {
-                    for (const item of cat.items) {
-                        merged.push({ categorie: cat.categorie, item });
-                    }
-                    appended++;
-                }
-            }
-            if (appended > 0) {
-                await db.config.put({ id: urgenceKey, value: merged });
-                console.log('VMCManager: ' + appended + ' catégorie(s) ajoutée(s) à "' + urgenceType.label + '" (' + urgenceType.id + ')');
-            }
-
-            // Marquer comme injecté pour ne plus jamais ré-injecter. Le flag se
-            // propage via SharePoint à tous les autres utilisateurs.
-            await db.config.put({ id: 'urgence_v1v2_seeded', value: true });
-            anythingAdded = true;
-            console.log('VMCManager: flag urgence_v1v2_seeded activé — plus de ré-injection');
-        }
-        return anythingAdded || changed;
+        if (changed) await db.config.put({ id: 'grille_types', value: types });
     } catch (e) {
         console.error('VMCManager: erreur injection grilles -', e);
-        return false;
     }
 }
 
@@ -3114,19 +3018,6 @@ const DataSync = {
             if (data.actions?.length)     await db.actions.bulkPut(data.actions);
             if (data.config?.length)      await db.config.bulkPut(data.config);
         });
-
-        // Ré-injecter les grilles obligatoires (ex : V1/V2 Exercice d'urgence)
-        // si la version distante ne les contenait pas, puis pousser la mise à jour
-        // pour propager les ajouts aux autres utilisateurs.
-        const added = await _ensureGrilleTypes();
-        if (added) {
-            this._dirty = true;
-            this._updateBadge(true);
-            await this._captureSnapshot();
-            // Sauvegarde différée (laisser le polling/saving en cours se terminer)
-            setTimeout(() => { this.save().catch(() => {}); }, 1000);
-            return;
-        }
 
         this._dirty = false;
         this._updateBadge(false);
