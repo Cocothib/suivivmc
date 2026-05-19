@@ -5397,9 +5397,15 @@ const VmcFormPage = {
         }
 
         const vmcType = vmc?.type || (grilleTypes.length ? grilleTypes[0].id : 'chantier');
+        // Toujours récupérer le template pour connaître la liste complète des scénarios
+        const template = await this._getTemplateForType(vmcType);
+        const scenarios = [...new Set(template.map(g => g.categorie))];
+        const hasScenarios = scenarios.length > 1;
+        // Scénario initial : celui enregistré sur la VMC, ou le 1er pour une nouvelle VMC multi-scénarios
+        const initialScenario = vmc?.scenario || (hasScenarios && !isEdit ? scenarios[0] : '');
         const grille = isEdit && vmc && vmc.grille && vmc.grille.length
             ? vmc.grille
-            : await this._getTemplateForType(vmcType);
+            : (initialScenario ? template.filter(g => g.categorie === initialScenario) : template);
 
         const selectedConducteurId = vmc?.conducteurId || visite?.conducteurId || '';
 
@@ -5419,6 +5425,13 @@ const VmcFormPage = {
                             <select class="form-select" id="vmc-type" required>
                                 ${grilleTypes.map(gt => `<option value="${gt.id}" ${vmcType === gt.id ? 'selected' : ''}>${this._escHtml(gt.label)}</option>`).join('')}
                             </select>
+                        </div>
+                        <div class="mb-2" id="vmc-scenario-wrapper" ${hasScenarios ? '' : 'style="display:none"'}>
+                            <label class="form-label">Scénario</label>
+                            <select class="form-select" id="vmc-scenario" ${isEdit ? 'disabled' : ''}>
+                                ${scenarios.map(c => `<option value="${this._escAttr(c)}" ${c === initialScenario ? 'selected' : ''}>${this._escHtml(c)}</option>`).join('')}
+                            </select>
+                            ${isEdit ? '<div class="form-text small">Scénario non modifiable après création.</div>' : '<div class="form-text small">Une seule catégorie sera affichée et enregistrée.</div>'}
                         </div>
                         <div class="mb-2">
                             <label class="form-label">Observateur *</label>
@@ -5942,13 +5955,37 @@ const VmcFormPage = {
     _bindForm(isEdit, vmc, visite) {
         const form = document.getElementById('form-vmc');
 
-        // Changer la grille quand le type change (seulement pour nouvelle VMC)
+        // Changer la grille quand le type ou le scénario change (seulement pour nouvelle VMC)
         if (!isEdit) {
-            document.getElementById('vmc-type').onchange = async (e) => {
-                const newType = e.target.value;
-                const grille = await this._getTemplateForType(newType);
-                this._renderGrille(grille);
+            const refreshScenarioAndGrille = async () => {
+                const newType = document.getElementById('vmc-type').value;
+                const template = await this._getTemplateForType(newType);
+                const scenarios = [...new Set(template.map(g => g.categorie))];
+                const hasScenarios = scenarios.length > 1;
+                const wrapper = document.getElementById('vmc-scenario-wrapper');
+                const sel = document.getElementById('vmc-scenario');
+                if (hasScenarios) {
+                    wrapper.style.display = '';
+                    sel.innerHTML = scenarios.map(c => `<option value="${this._escAttr(c)}">${this._escHtml(c)}</option>`).join('');
+                    const grille = template.filter(g => g.categorie === scenarios[0]);
+                    this._renderGrille(grille);
+                } else {
+                    wrapper.style.display = 'none';
+                    sel.innerHTML = '';
+                    this._renderGrille(template);
+                }
             };
+            document.getElementById('vmc-type').onchange = refreshScenarioAndGrille;
+
+            const scenarioSel = document.getElementById('vmc-scenario');
+            if (scenarioSel) {
+                scenarioSel.onchange = async () => {
+                    const newType = document.getElementById('vmc-type').value;
+                    const template = await this._getTemplateForType(newType);
+                    const grille = template.filter(g => g.categorie === scenarioSel.value);
+                    this._renderGrille(grille);
+                };
+            }
         }
 
         form.onsubmit = async e => {
@@ -6027,8 +6064,16 @@ const VmcFormPage = {
         const signatureObserve = this._signaturePadObserve && !this._signaturePadObserve.isEmpty()
             ? this._signaturePadObserve.toDataURL('image/png') : (vmc?.signatureObserve || null);
 
+        // Scénario : récupéré si le wrapper est visible (grille multi-catégories)
+        const scenarioWrapper = document.getElementById('vmc-scenario-wrapper');
+        const scenarioSel = document.getElementById('vmc-scenario');
+        const scenario = (scenarioWrapper && scenarioWrapper.style.display !== 'none' && scenarioSel)
+            ? scenarioSel.value
+            : (vmc?.scenario || '');
+
         const data = {
             type:           document.getElementById('vmc-type').value,
+            scenario,
             date:           document.getElementById('vmc-date').value,
             site:           document.getElementById('vmc-site').value.trim(),
             conducteurId,
@@ -7015,6 +7060,7 @@ const ImportExport = {
         const colR = pageW / 2 + 5;
         const infosLeft = [
             ['Type', vmc.type || '-'],
+            ...(vmc.scenario ? [['Scénario', vmc.scenario]] : []),
             ['Date', this._fmtDatePDF(vmc.date)],
             ['Site', vmc.site || '-']
         ];
