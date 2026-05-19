@@ -2286,60 +2286,70 @@ async function _ensureGrilleTypes() {
                 }
             }
         }
-        // Trouver la grille "Exercice d'urgence" existante par label normalisé
-        // (le slug peut être "exercice_d_urgence", "exercice_urgence", etc. selon comment
-        // elle a été créée). Si elle n'existe pas, on la crée avec le slug standard.
-        const normalize = s => (s || '').toLowerCase()
-            .normalize('NFD').replace(/[̀-ͯ]/g, '')
-            .replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
-        const URGENCE_LABEL = "Exercice d'urgence";
-        const URGENCE_NORM  = normalize(URGENCE_LABEL);
-        let urgenceType = types.find(t => normalize(t.label) === URGENCE_NORM);
-        if (!urgenceType) {
-            urgenceType = { id: 'exercice_d_urgence', label: URGENCE_LABEL };
-            types.push(urgenceType);
-            changed = true;
-        }
+        // Injection unique des V1/V2 Exercice d'urgence : si déjà fait (flag stocké
+        // en config et synchronisé via SharePoint), on n'y touche plus — l'utilisateur
+        // peut alors renommer/supprimer librement les catégories V1/V2 sans qu'elles
+        // soient réinjectées.
+        const seedFlag = await DB.getConfig('urgence_v1v2_seeded');
+        if (!seedFlag) {
+            // Trouver la grille "Exercice d'urgence" existante par label normalisé
+            // (le slug peut être "exercice_d_urgence", "exercice_urgence", etc.).
+            const normalize = s => (s || '').toLowerCase()
+                .normalize('NFD').replace(/[̀-ͯ]/g, '')
+                .replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+            const URGENCE_LABEL = "Exercice d'urgence";
+            const URGENCE_NORM  = normalize(URGENCE_LABEL);
+            let urgenceType = types.find(t => normalize(t.label) === URGENCE_NORM);
+            if (!urgenceType) {
+                urgenceType = { id: 'exercice_d_urgence', label: URGENCE_LABEL };
+                types.push(urgenceType);
+                changed = true;
+            }
 
-        // Nettoyage du doublon créé par la version précédente du seed (id='exercice_urgence')
-        // si ce doublon n'a pas la même id que la grille existante et qu'il ne contient que V1/V2.
-        const DUP_ID = 'exercice_urgence';
-        if (urgenceType.id !== DUP_ID) {
-            const dupIdx = types.findIndex(t => t.id === DUP_ID);
-            if (dupIdx >= 0) {
-                const dupContent = await DB.getConfig('grille_template_' + DUP_ID) || [];
-                const mustHaveCats = new Set(URGENCE_CATEGORIES_MUST_HAVE.map(c => c.categorie));
-                const onlyOurCats = dupContent.length === 0 ||
-                    dupContent.every(g => mustHaveCats.has(g.categorie));
-                if (onlyOurCats) {
-                    types.splice(dupIdx, 1);
-                    await db.config.delete('grille_template_' + DUP_ID);
-                    changed = true;
-                    console.log('VMCManager: doublon "exercice_urgence" supprimé');
+            // Nettoyage du doublon créé par une version précédente du seed (id='exercice_urgence')
+            const DUP_ID = 'exercice_urgence';
+            if (urgenceType.id !== DUP_ID) {
+                const dupIdx = types.findIndex(t => t.id === DUP_ID);
+                if (dupIdx >= 0) {
+                    const dupContent = await DB.getConfig('grille_template_' + DUP_ID) || [];
+                    const mustHaveCats = new Set(URGENCE_CATEGORIES_MUST_HAVE.map(c => c.categorie));
+                    const onlyOurCats = dupContent.length === 0 ||
+                        dupContent.every(g => mustHaveCats.has(g.categorie));
+                    if (onlyOurCats) {
+                        types.splice(dupIdx, 1);
+                        await db.config.delete('grille_template_' + DUP_ID);
+                        changed = true;
+                        console.log('VMCManager: doublon "exercice_urgence" supprimé');
+                    }
                 }
             }
-        }
 
-        if (changed) await db.config.put({ id: 'grille_types', value: types });
+            if (changed) await db.config.put({ id: 'grille_types', value: types });
 
-        // Merge non-destructif : ajouter les catégories V1/V2 si absentes de la grille cible.
-        const urgenceKey = 'grille_template_' + urgenceType.id;
-        const current = await DB.getConfig(urgenceKey) || [];
-        const existingCats = new Set(current.map(g => g.categorie));
-        let merged = [...current];
-        let appended = 0;
-        for (const cat of URGENCE_CATEGORIES_MUST_HAVE) {
-            if (!existingCats.has(cat.categorie)) {
-                for (const item of cat.items) {
-                    merged.push({ categorie: cat.categorie, item });
+            // Merge non-destructif : ajouter les catégories V1/V2 si absentes.
+            const urgenceKey = 'grille_template_' + urgenceType.id;
+            const current = await DB.getConfig(urgenceKey) || [];
+            const existingCats = new Set(current.map(g => g.categorie));
+            let merged = [...current];
+            let appended = 0;
+            for (const cat of URGENCE_CATEGORIES_MUST_HAVE) {
+                if (!existingCats.has(cat.categorie)) {
+                    for (const item of cat.items) {
+                        merged.push({ categorie: cat.categorie, item });
+                    }
+                    appended++;
                 }
-                appended++;
             }
-        }
-        if (appended > 0) {
-            await db.config.put({ id: urgenceKey, value: merged });
+            if (appended > 0) {
+                await db.config.put({ id: urgenceKey, value: merged });
+                console.log('VMCManager: ' + appended + ' catégorie(s) ajoutée(s) à "' + urgenceType.label + '" (' + urgenceType.id + ')');
+            }
+
+            // Marquer comme injecté pour ne plus jamais ré-injecter. Le flag se
+            // propage via SharePoint à tous les autres utilisateurs.
+            await db.config.put({ id: 'urgence_v1v2_seeded', value: true });
             anythingAdded = true;
-            console.log('VMCManager: ' + appended + ' catégorie(s) ajoutée(s) à "' + urgenceType.label + '" (' + urgenceType.id + ')');
+            console.log('VMCManager: flag urgence_v1v2_seeded activé — plus de ré-injection');
         }
         return anythingAdded || changed;
     } catch (e) {
