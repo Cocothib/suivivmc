@@ -3398,6 +3398,13 @@ const DataSync = {
                         }
                         return;
                     }
+                    // Si des modifs locales n'ont pas encore été poussées, on lance d'abord
+                    // un save() (qui fait un merge avec remote) au lieu d'écraser la base locale.
+                    if (this._dirty) {
+                        console.log('DataSync: modifs locales en attente, save() avant pull');
+                        await this.save();
+                        return;
+                    }
                     console.log(`DataSync: nouvelle version detectee (${localVersion} → ${remoteVersion})`);
                     await this._applyRemoteData(data);
                     // Rafraichir la page courante
@@ -3475,6 +3482,14 @@ const DataSync = {
     async _applyPendingIfAny() {
         if (!this._pendingRemoteData) return false;
         if (this._isUserEditing()) return false;
+        // Si des modifs locales sont en attente de push, on save d'abord (merge) au lieu d'écraser.
+        if (this._dirty) {
+            console.log('DataSync: modifs locales en attente, save() avant application différée');
+            this._pendingRemoteData = null;
+            this._pendingNotified = false;
+            try { await this.save(); } catch (e) { console.error(e); }
+            return false;
+        }
         const data = this._pendingRemoteData;
         this._pendingRemoteData = null;
         this._pendingNotified = false;
