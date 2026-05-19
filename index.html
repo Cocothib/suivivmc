@@ -2191,9 +2191,41 @@ async function ensureSeed() {
 
 async function _ensureGrilleTypes() {
     const REQUIRED = [
-        { id: 'audit_qse_chantier', label: 'Audit QSE Chantier' }
+        { id: 'audit_qse_chantier', label: 'Audit QSE Chantier' },
+        { id: 'exercice_urgence',   label: "Exercice d'urgence" }
+    ];
+    // Catégories à garantir dans la grille "Exercice d'urgence" (ajoutées si absentes,
+    // sans toucher aux catégories déjà saisies par l'utilisateur — modifiables ensuite via l'UI).
+    const URGENCE_CATEGORIES_MUST_HAVE = [
+        {
+            categorie: "V1 — Déversement huile hydraulique (nacelle/chariot)",
+            items: [
+                "Étape 1 — Alerter chef d'équipe + sécuriser zone (EPI, périmètre 3 m)",
+                "Étape 2 — Confiner avec boudin absorbant en aval de la fuite (sens d'écoulement, avaloirs)",
+                "Étape 3 — Absorber avec granulés/feuilles absorbantes jusqu'à disparition visible",
+                "Étape 4 — Collecter souillés en sac DD étanche → bac DID site + BSD",
+                "Évaluation — Temps de réaction < 5 min",
+                "Évaluation — Complétude du kit anti-pollution",
+                "Évaluation — Traçabilité du déchet (EN 12.X)"
+            ]
+        },
+        {
+            categorie: "V2 — Déversement carburant/gasoil (groupe électrogène, véhicule)",
+            items: [
+                "Étape 1 — Couper source (vanne, contact) + écarter sources d'ignition + EPI ATEX si volume > 5 L",
+                "Étape 2 — Obturer avaloirs proches (plaque/boudin) + confiner avec boudin absorbant hydrocarbures",
+                "Étape 3 — Absorber au granulé minéral (jamais sciure) + collecter en sac DD étiqueté",
+                "Étape 4 — Évacuer vers bac DID + BSD hydrocarbures",
+                "Évaluation — Réactivité",
+                "Évaluation — Maîtrise du risque incendie",
+                "Évaluation — Traçabilité (EN 12.X)"
+            ]
+        }
     ];
     const TPL = {
+        exercice_urgence: URGENCE_CATEGORIES_MUST_HAVE.flatMap(c =>
+            c.items.map(item => ({ categorie: c.categorie, item }))
+        ),
         audit_qse_chantier: [
             { categorie: 'Gestion des déchets', item: 'Le tri des déchets est effectif sur le chantier (5 flux : carton, métal, plastique, bois, DIB)' },
             { categorie: 'Gestion des déchets', item: 'Les bennes/zones de tri sont identifiées et étiquetées' },
@@ -2257,6 +2289,26 @@ async function _ensureGrilleTypes() {
             }
         }
         if (changed) await db.config.put({ id: 'grille_types', value: types });
+
+        // Merge non-destructif : ajouter les catégories V1/V2 si absentes de la grille existante.
+        // Ne touche pas aux catégories déjà saisies (ex: "Simulation de situation d'urgence").
+        const urgenceKey = 'grille_template_exercice_urgence';
+        const current = await DB.getConfig(urgenceKey) || [];
+        const existingCats = new Set(current.map(g => g.categorie));
+        let merged = [...current];
+        let appended = 0;
+        for (const cat of URGENCE_CATEGORIES_MUST_HAVE) {
+            if (!existingCats.has(cat.categorie)) {
+                for (const item of cat.items) {
+                    merged.push({ categorie: cat.categorie, item });
+                }
+                appended++;
+            }
+        }
+        if (appended > 0) {
+            await db.config.put({ id: urgenceKey, value: merged });
+            console.log('VMCManager: ' + appended + ' catégorie(s) ajoutée(s) à "Exercice d\'urgence"');
+        }
     } catch (e) {
         console.error('VMCManager: erreur injection grilles -', e);
     }
