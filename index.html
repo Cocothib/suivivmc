@@ -2270,6 +2270,7 @@ async function _ensureGrilleTypes() {
     try {
         let types = await DB.getConfig('grille_types') || [];
         let changed = false;
+        let anythingAdded = false;
         for (const rg of REQUIRED) {
             if (!types.find(t => t.id === rg.id)) {
                 types.push({ id: rg.id, label: rg.label });
@@ -2280,6 +2281,7 @@ async function _ensureGrilleTypes() {
             if (!existing || existing.length === 0) {
                 if (TPL[rg.id]) {
                     await db.config.put({ id: 'grille_template_' + rg.id, value: TPL[rg.id] });
+                    anythingAdded = true;
                     console.log('VMCManager: template injectee -', rg.id, '(' + TPL[rg.id].length + ' items)');
                 }
             }
@@ -2336,10 +2338,13 @@ async function _ensureGrilleTypes() {
         }
         if (appended > 0) {
             await db.config.put({ id: urgenceKey, value: merged });
+            anythingAdded = true;
             console.log('VMCManager: ' + appended + ' catégorie(s) ajoutée(s) à "' + urgenceType.label + '" (' + urgenceType.id + ')');
         }
+        return anythingAdded || changed;
     } catch (e) {
         console.error('VMCManager: erreur injection grilles -', e);
+        return false;
     }
 }
 
@@ -3099,6 +3104,19 @@ const DataSync = {
             if (data.actions?.length)     await db.actions.bulkPut(data.actions);
             if (data.config?.length)      await db.config.bulkPut(data.config);
         });
+
+        // Ré-injecter les grilles obligatoires (ex : V1/V2 Exercice d'urgence)
+        // si la version distante ne les contenait pas, puis pousser la mise à jour
+        // pour propager les ajouts aux autres utilisateurs.
+        const added = await _ensureGrilleTypes();
+        if (added) {
+            this._dirty = true;
+            this._updateBadge(true);
+            await this._captureSnapshot();
+            // Sauvegarde différée (laisser le polling/saving en cours se terminer)
+            setTimeout(() => { this.save().catch(() => {}); }, 1000);
+            return;
+        }
 
         this._dirty = false;
         this._updateBadge(false);
