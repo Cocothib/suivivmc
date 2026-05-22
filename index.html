@@ -5383,6 +5383,17 @@ const PlanningPage = {
 const VmcFormPage = {
     _signaturePad: null,
 
+    // Determine si un type fonctionne en mode "un seul scenario a la fois"
+    // (uniquement les exercices d'urgence). Tous les autres types affichent
+    // la grille complete d'un coup.
+    _typeUsesScenarios(typeId, label) {
+        const norm = s => String(s||'').toLowerCase()
+            .normalize('NFD').replace(/[̀-ͯ]/g, '')
+            .replace(/[^a-z0-9]/g, '');
+        const probe = norm(typeId) + norm(label);
+        return /exerciceurgence|urgenceexercice/.test(probe);
+    },
+
     async render(container, visiteIdOrVmcId) {
         const conducteurs = await DB.getConducteurs();
         const grilleTypes = await DB.getConfig('grille_types') || [
@@ -5415,7 +5426,10 @@ const VmcFormPage = {
         // Toujours récupérer le template pour connaître la liste complète des scénarios
         const template = await this._getTemplateForType(vmcType);
         const scenarios = [...new Set(template.map(g => g.categorie))];
-        const hasScenarios = scenarios.length > 1;
+        const vmcTypeLabel = (grilleTypes.find(t => t.id === vmcType) || {}).label || '';
+        // Mode scenario reserve aux exercices d'urgence ; tous les autres types
+        // affichent la grille complete d'un coup.
+        const hasScenarios = scenarios.length > 1 && this._typeUsesScenarios(vmcType, vmcTypeLabel);
         // Scénario initial : celui enregistré sur la VMC, ou le 1er pour une nouvelle VMC multi-scénarios
         const initialScenario = vmc?.scenario || (hasScenarios && !isEdit ? scenarios[0] : '');
         const grille = isEdit && vmc && vmc.grille && vmc.grille.length
@@ -5973,10 +5987,12 @@ const VmcFormPage = {
         // Changer la grille quand le type ou le scénario change (seulement pour nouvelle VMC)
         if (!isEdit) {
             const refreshScenarioAndGrille = async () => {
-                const newType = document.getElementById('vmc-type').value;
+                const typeSelect = document.getElementById('vmc-type');
+                const newType = typeSelect.value;
+                const newLabel = typeSelect.selectedOptions[0]?.textContent || '';
                 const template = await this._getTemplateForType(newType);
                 const scenarios = [...new Set(template.map(g => g.categorie))];
-                const hasScenarios = scenarios.length > 1;
+                const hasScenarios = scenarios.length > 1 && this._typeUsesScenarios(newType, newLabel);
                 const wrapper = document.getElementById('vmc-scenario-wrapper');
                 const sel = document.getElementById('vmc-scenario');
                 if (hasScenarios) {
