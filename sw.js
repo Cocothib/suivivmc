@@ -6,7 +6,7 @@
    - API Graph Microsoft : network-only (pas de cache API)
    ============================================================= */
 
-const CACHE_NAME = 'vmc-pwa-v31';
+const CACHE_NAME = 'vmc-pwa-v32';
 const APP_SHELL = ['./index.html', './manifest.json'];
 
 /* --- Installation : pre-cache du shell --- */
@@ -14,7 +14,9 @@ self.addEventListener('install', (event) => {
     event.waitUntil(
         caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL))
     );
-    self.skipWaiting();
+    // #28 — pas de skipWaiting() automatique : le nouveau SW reste en "waiting"
+    // pour eviter de charger un shell N+1 pendant une edition en cours.
+    // (Un flow de mise a jour pilote par l'UI pourra l'activer plus tard.)
 });
 
 /* --- Activation : nettoyage anciens caches --- */
@@ -41,7 +43,10 @@ self.addEventListener('fetch', (event) => {
     // Network-first : essayer le reseau, fallback sur cache
     event.respondWith(
         fetch(event.request).then((response) => {
-            if (response && response.status === 200) {
+            // #29 — ne mettre en cache que des reponses "saines" du meme origine :
+            // evite de cacher des pages interstitielles (login/proxy) ou redirigees
+            // qui seraient ensuite servies hors-ligne a la place du shell.
+            if (response && response.ok && response.type === 'basic' && !response.redirected) {
                 const clone = response.clone();
                 caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
             }

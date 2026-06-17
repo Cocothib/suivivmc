@@ -1092,7 +1092,7 @@ body {
                             &#x1F4DD; Remarques
                         </a>
                     </li>
-                    <li class="nav-item">
+                    <li class="nav-item" data-admin-only>
                         <a class="nav-link" href="#config" data-page="config">
                             &#x2699;&#xFE0F; Paramètres
                         </a>
@@ -2175,16 +2175,10 @@ async function ensureSeed() {
         console.log('VMCManager: tables vides apres migration, injection des donnees...');
         await _seedData();
         console.log('VMCManager: donnees injectees avec succes');
-    } else {
-        // Ajouter les conducteurs manquants (nouveaux ajouts au SEED)
-        for (const c of SEED_CONDUCTEURS) {
-            const existing = await db.conducteurs.get(c.id);
-            if (!existing) {
-                await db.conducteurs.put(c);
-                console.log('VMCManager: conducteur ajoute -', c.nom);
-            }
-        }
     }
+    // BUG #16 — si la base n'est PAS vide, on ne re-injecte PAS les conducteurs SEED :
+    // un conducteur supprime (localement ou cote SharePoint) ne doit pas reapparaitre.
+    // Le seed des conducteurs est reserve a la premiere installation (base vide).
     // Toujours verifier les grilles manquantes (base neuve OU existante)
     await _ensureGrilleTypes();
 }
@@ -2296,7 +2290,8 @@ const DB = {
     },
     getVmc(id)               { return db.vmcs.get(id); },
     putVmc(data)             {
-        data.updatedAt = data.updatedAt || new Date().toISOString();
+        if (!data.createdAt) data.createdAt = new Date().toISOString();
+        data.updatedAt = new Date().toISOString();
         const wasNew = !data.id;
         return db.vmcs.put(data).then(r => {
             DataSync.markDirty();
@@ -2323,6 +2318,8 @@ const DB = {
     },
     getAction(id)            { return db.actions.get(id); },
     putAction(data)          {
+        if (!data.createdAt) data.createdAt = new Date().toISOString();
+        data.updatedAt = new Date().toISOString();
         const wasNew = !data.id;
         return db.actions.put(data).then(r => {
             DataSync.markDirty();
@@ -2652,7 +2649,7 @@ const DataMerge = {
 <!-- ============================================================= -->
 <!-- PWA : MSAL.js (authentification Microsoft 365)                -->
 <!-- ============================================================= -->
-<script src="https://alcdn.msauth.net/browser/2.28.1/js/msal-browser.min.js"></script>
+<script src="https://alcdn.msauth.net/browser/2.28.1/js/msal-browser.min.js" integrity="sha384-ei8xVSyFPTuRnbO1sdYy5qJT6Kd9neBfVG8AjZySEwdMG1GhCThbceSqxJnx0Ci3" crossorigin="anonymous"></script>
 
 <!-- PWA : Configuration Graph API / MSAL -->
 <script>
@@ -2686,6 +2683,7 @@ const VMC_CONFIG = {
     DATA_FILE_NAME:       'vmc-data.json',                   // nom du fichier de donnees
     ACTIVITY_LOG_FILE:    'Documents/SuiviVMC/activity-log.json', // journal d'activite
     PRESENCE_FOLDER:      'Documents/SuiviVMC/.presence',    // dossier presence
+    PHOTOS_FOLDER:        'Documents/SuiviVMC/photos',        // #15 — photos externalisees (binaire)
 
     // Scopes Graph API
     SCOPES: ['Files.ReadWrite.All', 'User.Read', 'Sites.ReadWrite.All'],
@@ -2872,7 +2870,12 @@ async function _listFiles(folderPath) {
 /* ---- Upload de fichier binaire (pour PDF) ---- */
 async function _uploadBinaryFile(filePath, blob) {
     const driveId = await _getDriveId();
-    const url = `https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${filePath}:/content`;
+    // #20 — encoder uniquement le segment de nom de fichier (dossier inchange),
+    // pour neutraliser tout caractere special residuel dans le chemin Graph.
+    const _segs = String(filePath).split('/');
+    _segs[_segs.length - 1] = encodeURIComponent(_segs[_segs.length - 1]);
+    const safePath = _segs.join('/');
+    const url = `https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${safePath}:/content`;
     const resp = await _graphFetch(url, {
         method: 'PUT',
         headers: { 'Content-Type': blob.type || 'application/octet-stream' },
@@ -2882,11 +2885,86 @@ async function _uploadBinaryFile(filePath, blob) {
     return resp.json();
 }
 
+/* ==============================================================
+   #15 — Externalisation des PHOTOS (binaire sur SharePoint)
+   Modele transpose de SuiviPDP : on stocke le fichier image dans la
+   bibliotheque et on ne garde dans le JSON qu'un { id, name, path }.
+   Le base64 (data) reste en fallback local tant que l'upload n'a pas
+   reussi, et en cache d'affichage cote local.
+   ============================================================== */
+
+// Generateur d'identifiant stable pour une photo (crypto si dispo, sinon fallback)
+function _photoUid() {
+    try {
+        if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+    } catch (_) { /* ignore */ }
+    return 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+}
+
+// Deduit l'extension de fichier a partir du mime d'un dataURL
+function _extFromMime(mime) {
+    const m = String(mime || '').toLowerCase();
+    if (m.includes('jpeg') || m.includes('jpg')) return 'jpg';
+    if (m.includes('png'))  return 'png';
+    if (m.includes('webp')) return 'webp';
+    if (m.includes('gif'))  return 'gif';
+    return 'jpg';
+}
+
+// Decode un dataURL "data:<mime>;base64,<...>" en { mime, bytes:Uint8Array }
+function _dataURLToBytes(dataUrl) {
+    const s = String(dataUrl || '');
+    const comma = s.indexOf(',');
+    if (comma < 0) throw new Error('dataURL invalide');
+    const header = s.slice(0, comma);
+    const mimeMatch = header.match(/^data:([^;]+)/i);
+    const mime = mimeMatch ? mimeMatch[1] : 'application/octet-stream';
+    const b64 = s.slice(comma + 1);
+    const bin = atob(b64);
+    const len = bin.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+    return { mime, bytes };
+}
+
+// PUT du binaire d'un dataURL sur …/root:/<filePath>:/content. Retourne l'item Graph.
+async function _uploadBinaryFromDataURL(filePath, dataUrl, mime) {
+    const { mime: detected, bytes } = _dataURLToBytes(dataUrl);
+    const blob = new Blob([bytes], { type: mime || detected || 'application/octet-stream' });
+    return _uploadBinaryFile(filePath, blob);
+}
+
+// GET du binaire d'un fichier Graph et conversion en dataURL (pour affichage).
+async function _downloadFileAsDataURL(filePath) {
+    const driveId = await _getDriveId();
+    const _segs = String(filePath).split('/');
+    _segs[_segs.length - 1] = encodeURIComponent(_segs[_segs.length - 1]);
+    const safePath = _segs.join('/');
+    const url = `https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${safePath}:/content`;
+    const resp = await _graphFetch(url);
+    if (!resp.ok) {
+        const err = new Error('Erreur telechargement fichier: ' + resp.status);
+        err.status = resp.status;
+        throw err;
+    }
+    const blob = await resp.blob();
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+    });
+}
+
 
 /* ==============================================================
    DataSync – meme interface que l'original, backend Graph API
    ============================================================== */
 const DataSync = {
+
+    _escHtml(str) {
+        return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    },
 
     /* --- Etat interne --- */
     _connected: false,          // remplace _dirHandle (utilise comme booleen)
@@ -2896,6 +2974,8 @@ const DataSync = {
     _loadedMeta: null,
     _lastSavedAt: null,
     _pollTimer: null,
+    _saveRetryCount: 0,         // compteur pour le backoff exponentiel des reprises de save()
+    _onlineHandlerAttached: false,
     _presenceTimer: null,
     _hasOtherUsers: false,
     _pendingRemoteData: null,   // donnees distantes differees (saisie en cours)
@@ -2932,6 +3012,53 @@ const DataSync = {
     },
 
     /* ================================================================
+       Controle d'acces administrateur
+       La liste des admins (_admins) est stockee dans db.config et
+       partagee automatiquement au remote (NON exclue de la sync).
+       ================================================================ */
+    _isAdminCached: true,   // cache synchrone pour les gardes de navigation (fail-open par defaut)
+
+    _normName(s) {
+        return (s || '').toString().trim().toLowerCase();
+    },
+
+    async loadAdmins() {
+        try {
+            const row = await db.config.get('_admins');
+            const list = row && Array.isArray(row.value) ? row.value : [];
+            return list;
+        } catch {
+            return [];
+        }
+    },
+
+    async isAdmin() {
+        const admins = await this.loadAdmins();
+        // Liste vide = setup initial : tout le monde est admin pour pouvoir se designer
+        if (!admins.length) return true;
+        const me = this._normName(this.getUserName());
+        if (!me) return false;
+        return admins.some(a => this._normName(a) === me);
+    },
+
+    async applyAdminUI() {
+        let admin;
+        try {
+            admin = await this.isAdmin();
+        } catch (e) {
+            // Fail-open : en cas de bug on ne verrouille pas l'app
+            console.warn('applyAdminUI: erreur, admin=true (fail-open)', e);
+            admin = true;
+        }
+        this._isAdminCached = admin;
+        // Masquer/afficher les elements reserves aux admins
+        document.querySelectorAll('[data-admin-only]').forEach(el => {
+            el.style.display = admin ? '' : 'none';
+        });
+        return admin;
+    },
+
+    /* ================================================================
        Chargement initial depuis les donnees embarquees
        ================================================================ */
     loadEmbeddedData() {
@@ -2954,6 +3081,14 @@ const DataSync = {
                 this._loadedMeta = metaConfig.value;
                 this._lastSavedAt = metaConfig.value?.lastSaved || null;
             }
+            // BUG #10 — recharger le snapshot persiste pour permettre un merge post-reload
+            // qui parte d'une base de comparaison correcte (et non vide).
+            try {
+                const snapConfig = await db.config.get('_snapshot');
+                if (snapConfig && typeof snapConfig.value === 'string') {
+                    this._loadedSnapshot = snapConfig.value;
+                }
+            } catch { /* ignore */ }
             return true;
         }
 
@@ -2992,6 +3127,33 @@ const DataSync = {
             const filePath = `${VMC_CONFIG.DATA_FOLDER_PATH}/${VMC_CONFIG.DATA_FILE_NAME}`;
             const data = await _readJsonFile(filePath);
             if (!data || !data._meta) return false;
+
+            // BUG #10 — au boot, si des modifications locales etaient en attente de flush
+            // (flag persiste) ET que le remote a une version plus recente que notre dernier
+            // sync, on FUSIONNE au lieu d'ecraser la base locale (sinon perte des saisies
+            // faites hors-ligne ou juste avant un reload).
+            let dirtyPersisted = false;
+            try {
+                const f = await db.config.get('_dirtyFlag');
+                dirtyPersisted = !!(f && f.value);
+            } catch { /* ignore */ }
+            const remoteVersion = data._meta.version || 0;
+            const localVersion  = this._loadedMeta?.version || 0;
+
+            if ((dirtyPersisted || this._dirty) && remoteVersion > localVersion && this._loadedSnapshot) {
+                console.log(`DataSync: boot avec modifs locales en attente → fusion (remote v${remoteVersion} vs local v${localVersion})`);
+                const merged = await this._mergeWithRemote(data);
+                await this._writeLocalData(merged);
+                this._loadedMeta = data._meta;
+                this._lastSavedAt = data._meta.lastSaved || null;
+                this._dirty = true;
+                this._updateBadge(true);
+                await this._captureSnapshot();
+                // Repousser le resultat fusionne sur SharePoint pour ne pas le perdre.
+                try { await this.save(); } catch (e) { console.warn('DataSync: save post-merge boot echoue', e); }
+                return true;
+            }
+
             await this._applyRemoteData(data);
             console.log('DataSync: donnees chargees depuis SharePoint (v' + data._meta.version + ')');
             return true;
@@ -3001,10 +3163,51 @@ const DataSync = {
         }
     },
 
+    // #15 — Construit une Map photoId -> data(base64) a partir des VMC LOCALES,
+    // pour reinjecter le cache d'affichage apres application/merge du remote
+    // (le remote ne fournit qu'un { id, name, path } pour les photos externalisees).
+    async _buildLocalPhotoDataMap() {
+        const map = new Map();
+        try {
+            const vmcs = await db.vmcs.toArray();
+            for (const v of vmcs) {
+                if (!v || !Array.isArray(v.photos)) continue;
+                for (const p of v.photos) {
+                    if (p && p.id && p.data) map.set(p.id, p.data);
+                }
+            }
+        } catch (e) { console.warn('DataSync: lecture cache photos local echouee', e); }
+        return map;
+    },
+
+    // #15 — Reinjecte le base64 `data` local (via Map) sur les photos d'un tableau de VMC
+    // qui n'ont qu'un `path`. Evite de perdre les images deja en cache local au reload/merge.
+    _reinjectLocalPhotoData(vmcs, dataMap) {
+        if (!dataMap || !dataMap.size) return vmcs;
+        for (const v of (vmcs || [])) {
+            if (!v || !Array.isArray(v.photos)) continue;
+            for (const p of v.photos) {
+                if (p && !p.data && p.id && dataMap.has(p.id)) {
+                    p.data = dataMap.get(p.id);
+                }
+            }
+        }
+        return vmcs;
+    },
+
     async _applyRemoteData(data) {
         if (!data) return;
         this._loadedMeta = data._meta || null;
         this._lastSavedAt = data._meta?.lastSaved || null;
+
+        // #15 — preserver le cache base64 local avant d'ecraser les VMC.
+        const _photoDataMap = await this._buildLocalPhotoDataMap();
+        if (Array.isArray(data.vmcs)) this._reinjectLocalPhotoData(data.vmcs, _photoDataMap);
+
+        // Le remote ne contient plus les cles de config internes (filtrees) : on les
+        // preserve a travers le clear() pour ne pas perdre meta/snapshot.
+        const keepInternal = (await db.config.toArray())
+            .filter(c => this._INTERNAL_CONFIG_IDS.includes(c.id));
 
         await db.transaction('rw', db.conducteurs, db.visites, db.vmcs, db.actions, db.config, async () => {
             await db.conducteurs.clear();
@@ -3017,23 +3220,35 @@ const DataSync = {
             if (data.vmcs?.length)        await db.vmcs.bulkPut(data.vmcs);
             if (data.actions?.length)     await db.actions.bulkPut(data.actions);
             if (data.config?.length)      await db.config.bulkPut(data.config);
+            if (keepInternal.length)      await db.config.bulkPut(keepInternal);
         });
 
         this._dirty = false;
         this._updateBadge(false);
+        // BUG #10 — on applique le remote : plus de modifs locales en attente.
+        try {
+            await db.config.put({ id: '_syncMeta', value: data._meta });
+            await db.config.put({ id: '_dirtyFlag', value: false });
+        } catch { /* ignore */ }
         await this._captureSnapshot();
     },
 
     /* ================================================================
        Snapshot & merge – eviter les pertes en cas de saisie concurrente
        ================================================================ */
+    // Cles de config internes (locales) a ne JAMAIS pousser au remote ni inclure
+    // dans le snapshot (sinon récursion/gonflement et faux diffs au merge).
+    _INTERNAL_CONFIG_IDS: ['_syncMeta', '_snapshot', '_dirtyFlag'],
+
     async _collectRawData() {
+        const config = (await db.config.toArray())
+            .filter(c => !this._INTERNAL_CONFIG_IDS.includes(c.id));
         return {
             conducteurs: await db.conducteurs.toArray(),
             visites:     await db.visites.toArray(),
             vmcs:        await db.vmcs.toArray(),
             actions:     await db.actions.toArray(),
-            config:      await db.config.toArray()
+            config
         };
     },
 
@@ -3041,6 +3256,11 @@ const DataSync = {
         try {
             const raw = await this._collectRawData();
             this._loadedSnapshot = JSON.stringify(raw);
+            // BUG #10 — persister le snapshot pour qu'un merge post-reload ne parte
+            // pas d'un snapshot vide (sinon toute la base locale serait vue comme "ajoutee").
+            try {
+                await db.config.put({ id: '_snapshot', value: this._loadedSnapshot });
+            } catch (e2) { console.warn('DataSync: snapshot non persiste', e2); }
         } catch (e) {
             console.warn('DataSync: impossible de capturer le snapshot', e);
             this._loadedSnapshot = null;
@@ -3048,6 +3268,8 @@ const DataSync = {
     },
 
     async _writeLocalData(data) {
+        const keepInternal = (await db.config.toArray())
+            .filter(c => this._INTERNAL_CONFIG_IDS.includes(c.id));
         await db.transaction('rw', db.conducteurs, db.visites, db.vmcs, db.actions, db.config, async () => {
             await db.conducteurs.clear();
             await db.visites.clear();
@@ -3059,6 +3281,7 @@ const DataSync = {
             if (data.vmcs?.length)        await db.vmcs.bulkPut(data.vmcs);
             if (data.actions?.length)     await db.actions.bulkPut(data.actions);
             if (data.config?.length)      await db.config.bulkPut(data.config);
+            if (keepInternal.length)      await db.config.bulkPut(keepInternal);
         });
     },
 
@@ -3068,8 +3291,62 @@ const DataSync = {
      * en local et sur SharePoint). Remappe les ids auto-increment en collision
      * pour ne perdre aucune entree creee simultanement par plusieurs users.
      */
+    /**
+     * BUG #4 — Fusion 3-way champ-a-champ d'un enregistrement modifie des deux cotes.
+     * snap = version au dernier sync, loc = version locale, rem = version remote actuelle.
+     * Pour chaque champ :
+     *  - change localement et pas cote remote → valeur locale
+     *  - change cote remote et pas localement → valeur remote
+     *  - change des deux cotes a la meme valeur → ok (identiques)
+     *  - change des deux cotes differemment → CONFLIT : on prend la version la plus
+     *    recente via updatedAt si disponible, sinon la valeur locale par defaut, et on logge.
+     */
+    _mergeRecord(snap, loc, rem, store) {
+        // Pas de base de comparaison fiable → on garde la version locale (comportement historique)
+        if (!snap) return loc;
+        const out = { ...rem };
+        const keys = new Set([...Object.keys(snap), ...Object.keys(loc), ...Object.keys(rem)]);
+        // updatedAt: le plus recent des deux cotes gagne en cas de conflit (best-effort)
+        const locTs = loc.updatedAt || loc.createdAt || '';
+        const remTs = rem.updatedAt || rem.createdAt || '';
+        const localWinsOnConflict = locTs >= remTs; // egalite/absence → local par defaut
+        let conflictFields = null;
+
+        for (const k of keys) {
+            const sv = JSON.stringify(snap[k]);
+            const lv = JSON.stringify(loc[k]);
+            const rv = JSON.stringify(rem[k]);
+            const changedLocal  = lv !== sv;
+            const changedRemote = rv !== sv;
+
+            if (changedLocal && !changedRemote) {
+                out[k] = loc[k];
+            } else if (!changedLocal && changedRemote) {
+                out[k] = rem[k];
+            } else if (changedLocal && changedRemote) {
+                if (lv === rv) {
+                    out[k] = loc[k]; // meme valeur des deux cotes
+                } else {
+                    out[k] = localWinsOnConflict ? loc[k] : rem[k];
+                    (conflictFields = conflictFields || []).push(k);
+                }
+            }
+            // sinon : inchange des deux cotes → on garde rem (deja dans out)
+        }
+
+        if (conflictFields && typeof ActivityLog !== 'undefined') {
+            ActivityLog.log('conflit_merge', {
+                store, id: out.id, champs: conflictFields,
+                resolution: localWinsOnConflict ? 'local' : 'remote'
+            });
+        }
+        return out;
+    },
+
     async _mergeWithRemote(remoteData) {
         const current = await this._collectRawData();
+        // #15 — cache base64 local des photos, a reinjecter sur le resultat fusionne.
+        const _photoDataMap = await this._buildLocalPhotoDataMap();
         let snapshot;
         try {
             snapshot = this._loadedSnapshot ? JSON.parse(this._loadedSnapshot)
@@ -3111,12 +3388,34 @@ const DataSync = {
                 if (!curById.has(id)) localDeletedIds.push(id);
             }
 
-            for (const id of localDeletedIds) remoteById.delete(id);
+            // BUG #3 — Suppression locale : ne pas ecraser une modif distante concurrente.
+            // Si le remote a change depuis notre snapshot, on conserve la version remote
+            // (le collegue a modifie l'enregistrement) au lieu de supprimer a l'aveugle.
+            for (const id of localDeletedIds) {
+                const rem  = remoteById.get(id);
+                const snap = snapById.get(id);
+                if (rem === undefined) continue; // deja absent cote remote
+                if (JSON.stringify(rem) !== JSON.stringify(snap)) {
+                    // Conflit suppression locale vs modification distante → on garde le remote
+                    if (typeof ActivityLog !== 'undefined') {
+                        ActivityLog.log('conflit_delete_vs_update', { store, id });
+                    }
+                    continue;
+                }
+                remoteById.delete(id);
+            }
 
+            // BUG #4 — Enregistrements modifies localement : fusion champ-a-champ 3-way
+            // au lieu d'un remplacement integral (qui ecraserait les champs modifies
+            // par un autre utilisateur cote remote).
             for (const entry of localUpdated) {
                 if (remoteById.has(entry.id)) {
-                    remoteById.set(entry.id, entry);
+                    const snap = snapById.get(entry.id);
+                    const rem  = remoteById.get(entry.id);
+                    const mergedRec = this._mergeRecord(snap, entry, rem, store);
+                    remoteById.set(entry.id, mergedRec);
                 } else {
+                    // Supprime a distance : conserver le comportement existant (re-creation).
                     localAdded.push(entry);
                 }
             }
@@ -3127,7 +3426,12 @@ const DataSync = {
             }
             for (const entry of localAdded) {
                 const newEntry = { ...entry };
-                if (autoIdStores.has(store) && remoteById.has(newEntry.id)) {
+                // BUG #13 — Les conducteurs ont un id MANUEL (maxId+1) : on les inclut
+                // dans le remap de collision au meme titre que les stores auto-increment,
+                // pour ne perdre aucune creation concurrente et patcher les FK.
+                const needsRemap = (autoIdStores.has(store) || store === 'conducteurs');
+                if (needsRemap && remoteById.has(newEntry.id) &&
+                    JSON.stringify(remoteById.get(newEntry.id)) !== JSON.stringify(newEntry)) {
                     const oldId = newEntry.id;
                     while (remoteById.has(nextId)) nextId++;
                     newEntry.id = nextId++;
@@ -3161,20 +3465,85 @@ const DataSync = {
             }
         }
 
+        // #15 — reinjecter le cache base64 local sur les photos externalisees.
+        this._reinjectLocalPhotoData(merged.vmcs, _photoDataMap);
+
         return merged;
     },
 
     /* ================================================================
        Sauvegarde vers SharePoint (Graph API)
        ================================================================ */
+
+    /**
+     * #15 — Externalise les photos des VMC en binaire sur SharePoint.
+     * Pour chaque photo qui a un base64 `data` mais PAS encore de `path`,
+     * tente l'upload ; en cas de succes, pose `photo.path` ET persiste ce
+     * path dans l'enregistrement LOCAL (IndexedDB) pour ne pas re-uploader.
+     * Le base64 `data` est CONSERVE en local (cache d'affichage) ; il sera
+     * retire de la version distante au moment du push (_collectData).
+     * ANTI-PERTE : en cas d'echec (offline, erreur Graph), on laisse `data`
+     * en place sans poser de path → reessai au prochain save.
+     */
+    async _externalizePhotos() {
+        if (!this._connected) return;
+        let vmcs;
+        try { vmcs = await db.vmcs.toArray(); } catch { return; }
+        for (const vmc of vmcs) {
+            if (!vmc || !Array.isArray(vmc.photos) || !vmc.photos.length) continue;
+            let changed = false;
+            for (const photo of vmc.photos) {
+                if (!photo) continue;
+                // Donner un id stable si absent (necessaire pour le nom de fichier)
+                if (!photo.id) { photo.id = _photoUid(); changed = true; }
+                // Deja externalisee ou pas de base64 a externaliser → rien a faire
+                if (photo.path) continue;
+                if (!photo.data || typeof photo.data !== 'string' || !photo.data.startsWith('data:')) continue;
+                try {
+                    const ext = _extFromMime((photo.data.match(/^data:([^;]+)/i) || [])[1]);
+                    const relPath = `${VMC_CONFIG.PHOTOS_FOLDER}/${vmc.id}/${photo.id}.${ext}`;
+                    await _uploadBinaryFromDataURL(relPath, photo.data);
+                    // Succes : on memorise le path. data reste en local (cache).
+                    photo.path = relPath;
+                    changed = true;
+                } catch (e) {
+                    // Echec → on garde data en fallback, reessai au prochain save.
+                    console.warn(`DataSync: upload photo ${photo.id} (VMC ${vmc.id}) echoue, base64 conserve`, e);
+                }
+            }
+            if (changed) {
+                try { await db.vmcs.put(vmc); }
+                catch (e) { console.warn('DataSync: persistance path photo locale echouee', e); }
+            }
+        }
+    },
+
+    // #15 — Retire le base64 `data` des photos ayant un `path` valide (version distante),
+    // mais garde { id, name, path }. Les photos sans path conservent `data` (fallback).
+    _stripPhotosForRemote(vmcs) {
+        return (vmcs || []).map(vmc => {
+            if (!vmc || !Array.isArray(vmc.photos) || !vmc.photos.length) return vmc;
+            const photos = vmc.photos.map(p => {
+                if (p && p.path) {
+                    const { id, name, path } = p;
+                    return { id, name, path };
+                }
+                return p; // pas de path → on garde data (fallback anti-perte)
+            });
+            return { ...vmc, photos };
+        });
+    },
+
     async _collectData() {
         // S'assurer que les grilles sont dans la config avant de sauvegarder
         await _ensureGrilleTypes();
         const conducteurs = await db.conducteurs.toArray();
         const visites     = await db.visites.toArray();
-        const vmcs        = await db.vmcs.toArray();
+        const vmcsRaw     = await db.vmcs.toArray();
+        const vmcs        = this._stripPhotosForRemote(vmcsRaw); // #15 — pas de base64 si path
         const actions     = await db.actions.toArray();
-        const config      = await db.config.toArray();
+        const config      = (await db.config.toArray())
+            .filter(c => !this._INTERNAL_CONFIG_IDS.includes(c.id));
         const version     = (this._loadedMeta?.version || 0) + 1;
         return {
             _meta: {
@@ -3225,8 +3594,10 @@ const DataSync = {
                 if (remoteReadFailed && (this._loadedMeta?.version || 0) > 0) {
                     console.error('DataSync: sauvegarde annulee (relecture distante impossible)');
                     showToast('Sauvegarde reportée : impossible de relire le fichier distant. Réessai automatique.', 'warning');
-                    clearTimeout(this._saveTimer);
-                    this._saveTimer = setTimeout(() => this.save(), VMC_CONFIG.SAVE_DEBOUNCE_MS || 5000);
+                    // BUG #18 — backoff exponentiel plafonne (et non un delai fixe) pour
+                    // ne pas marteler SharePoint quand le reseau est durablement coupe.
+                    // (this._saving est remis a false par le finally avant le retry differe)
+                    this._scheduleSaveRetry();
                     return;
                 }
 
@@ -3244,7 +3615,12 @@ const DataSync = {
                     showToast(`Fusion avec les données de ${savedBy}`, 'info');
                 }
 
-                // 3. Collecter les donnees locales (post-merge) et sauvegarder
+                // 3. Externaliser les photos (binaire) AVANT d'ecrire le JSON.
+                //    Idempotent : ne touche qu'aux photos data-sans-path. En cas
+                //    d'echec d'upload, le base64 reste en fallback (reessai au prochain save).
+                await this._externalizePhotos();
+
+                // 4. Collecter les donnees locales (post-merge) et sauvegarder
                 const data = await this._collectData();
                 data._meta.version = baseVersion + 1;
 
@@ -3275,8 +3651,11 @@ const DataSync = {
                 this._loadedMeta = data._meta;
                 this._lastSavedAt = data._meta.lastSaved;
                 this._dirty = false;
+                this._saveRetryCount = 0;
                 this._updateBadge(false);
                 await db.config.put({ id: '_syncMeta', value: data._meta });
+                // BUG #10 — modifs locales bien poussees : plus d'intention en attente.
+                await db.config.put({ id: '_dirtyFlag', value: false });
                 await this._captureSnapshot();
                 this._pendingRemoteData = null;
                 this._pendingNotified = false;
@@ -3287,9 +3666,25 @@ const DataSync = {
         } catch (e) {
             console.error('DataSync: erreur sauvegarde SharePoint', e);
             showToast('Erreur de sauvegarde SharePoint. Les données sont conservées localement.', 'warning');
+            // BUG #9 — un echec d'ecriture reseau (non-412) ne doit pas abandonner
+            // silencieusement l'intention de sauvegarde : on reprogramme un retry differe.
+            // Le 412 est deja gere plus haut (cycle de fusion) ; ici ce sont les pannes reseau.
+            if (this._connected && this._dirty && !e?.isPreconditionFailed) {
+                this._scheduleSaveRetry();
+            }
         } finally {
             this._saving = false;
         }
+    },
+
+    /* Reprogramme une reprise de save() avec backoff exponentiel plafonne (BUG #9/#18) */
+    _scheduleSaveRetry() {
+        this._saveRetryCount = (this._saveRetryCount || 0) + 1;
+        const base = VMC_CONFIG.SAVE_DEBOUNCE_MS || 1000;
+        const delay = Math.min(base * Math.pow(2, this._saveRetryCount - 1), 30000);
+        console.warn(`DataSync: reprise de sauvegarde dans ${delay}ms (tentative ${this._saveRetryCount})`);
+        clearTimeout(this._saveTimer);
+        this._saveTimer = setTimeout(() => this.save(), delay);
     },
 
     /* ================================================================
@@ -3298,6 +3693,10 @@ const DataSync = {
     markDirty() {
         this._dirty = true;
         this._updateBadge(true);
+        // BUG #10 — persister l'intention de sauvegarde pour survivre a un reload :
+        // si l'app redemarre avant le flush, le boot saura qu'il y a des modifs locales
+        // a fusionner avec le remote au lieu de les ecraser.
+        try { db.config.put({ id: '_dirtyFlag', value: true }); } catch { /* ignore */ }
         if (this._connected) {
             clearTimeout(this._saveTimer);
             this._saveTimer = setTimeout(() => this.save(), VMC_CONFIG.SAVE_DEBOUNCE_MS);
@@ -3376,15 +3775,49 @@ const DataSync = {
        ================================================================ */
     startPolling() {
         if (this._pollTimer) clearInterval(this._pollTimer);
+        // BUG #9 — au retour en ligne, repousser immediatement les modifs locales en
+        // attente (sinon rien n'est resynchronise tant que l'utilisateur ne refait pas
+        // une modification). Attache une seule fois.
+        if (!this._onlineHandlerAttached) {
+            this._onlineHandlerAttached = true;
+            window.addEventListener('online', () => {
+                if (this._connected && this._dirty) {
+                    console.log('DataSync: retour en ligne → resynchronisation des modifs locales');
+                    this.save();
+                }
+            });
+        }
         this._pollTimer = setInterval(async () => {
             if (!this._connected || this._saving) return;
             try {
                 const filePath = `${VMC_CONFIG.DATA_FOLDER_PATH}/${VMC_CONFIG.DATA_FILE_NAME}`;
-                const data = await _readJsonFile(filePath);
+                const { data, eTag } = await _readJsonFileWithETag(filePath);
                 if (!data || !data._meta) return;
 
                 const remoteVersion = data._meta.version || 0;
                 const localVersion  = this._loadedMeta?.version || 0;
+
+                // Downgrade de version : si la version distante a REGRESSE ou est
+                // inchangee alors que l'ETag distant a change (ex restauration d'une
+                // version anterieure cote SharePoint), c'est une divergence reelle.
+                const etagChanged = eTag && this._lastPollETag && eTag !== this._lastPollETag;
+                this._lastPollETag = eTag || this._lastPollETag;
+                if (remoteVersion <= localVersion && etagChanged) {
+                    if (typeof ActivityLog !== 'undefined') {
+                        ActivityLog.log('divergence_version', {
+                            remoteVersion, localVersion, savedBy: data._meta.savedBy || ''
+                        });
+                    }
+                    console.warn(`DataSync: divergence detectee (remote v${remoteVersion} <= local v${localVersion}, ETag change) — restauration probable`);
+                    // Prudence : ne pas ecraser un local non synchronise.
+                    if (!this._isUserEditing() && !this._dirty) {
+                        await this._applyRemoteData(data);
+                        if (typeof App !== 'undefined' && App.route) App.route();
+                        const user = data._meta.savedBy || 'quelqu\'un';
+                        showToast(`Données restaurées par ${user} (version antérieure)`, 'warning');
+                    }
+                    return;
+                }
 
                 if (remoteVersion > localVersion) {
                     // Si l'utilisateur est en train de saisir une VMC, differer
@@ -3438,14 +3871,49 @@ const DataSync = {
         }
     },
 
+    _presenceSafeName() {
+        const name = this.getUserName() || 'anonyme';
+        return name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+            .replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'user';
+    },
+
     async unregisterPresence() {
         if (!this._connected) return;
-        const name = this.getUserName() || 'anonyme';
-        const safeName = name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-            .replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'user';
+        const safeName = this._presenceSafeName();
         try {
             await _deleteFile(`${VMC_CONFIG.PRESENCE_FOLDER}/${safeName}.json`);
         } catch { /* ignore */ }
+    },
+
+    /* #30 \u2014 Au beforeunload, un DELETE Graph asynchrone (qui exige un token MSAL
+       acquis de maniere asynchrone) est annule a la fermeture de l'onglet.
+       On tente un nettoyage best-effort avec keepalive:true SI un token est
+       deja disponible en cache synchrone ; sinon on NE bloque PAS et on s'appuie
+       sur le mecanisme STALE (PRESENCE_STALE_MS) qui purge les presences
+       obsoletes cote lecture. Aucune exception n'est propagee au unload. */
+    unregisterPresenceBeacon() {
+        try {
+            if (!this._connected) return;
+            const safeName = this._presenceSafeName();
+            // Token deja en cache MSAL (sans round-trip async) ?
+            let token = null;
+            try {
+                if (_msalInstance && _msalAccount && typeof _msalInstance.getTokenCache === 'function') {
+                    // pas d'API synchrone fiable d'acces au token brut : on retombe sur STALE.
+                    token = null;
+                }
+            } catch { token = null; }
+            if (token && _cachedDriveId) {
+                const url = `https://graph.microsoft.com/v1.0/drives/${_cachedDriveId}/root:/`
+                    + `${VMC_CONFIG.PRESENCE_FOLDER}/${encodeURIComponent(safeName + '.json')}`;
+                fetch(url, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': `Bearer ${token}` },
+                    keepalive: true
+                }).catch(() => {});
+            }
+            // Sinon : pas de DELETE fiable au unload \u2192 la presence expirera via STALE.
+        } catch { /* ne jamais lever au unload */ }
     },
 
     async getActiveUsers() {
@@ -3474,10 +3942,24 @@ const DataSync = {
     /* ================================================================
        Saisie en cours – eviter les resets pendant qu'on remplit un formulaire
        ================================================================ */
+    _editingActive: 0,          // compteur de formulaires/modales d'edition ouverts
+
     _isUserEditing() {
         const hash = (location.hash || '').slice(1);
-        return hash.startsWith('vmc-new') || hash.startsWith('vmc-edit');
+        if (hash.startsWith('vmc-new') || hash.startsWith('vmc-edit')) return true;
+        // BUG #19 — une saisie dans n'importe quelle modale/formulaire d'edition
+        // (observateur, action, editeur de grille config...) ne doit pas etre effacee
+        // par un poll. On considere l'utilisateur en train d'editer si un flag explicite
+        // est pose OU si une modale Bootstrap est actuellement affichee.
+        if (this._editingActive > 0) return true;
+        try {
+            if (document.querySelector('.modal.show')) return true;
+        } catch { /* ignore */ }
+        return false;
     },
+
+    _beginEditing() { this._editingActive++; },
+    _endEditing()   { if (this._editingActive > 0) this._editingActive--; },
 
     async _applyPendingIfAny() {
         if (!this._pendingRemoteData) return false;
@@ -3652,7 +4134,7 @@ const DataSync = {
             bar.innerHTML = '';
             return;
         }
-        const names = others.map(u => u.user).join(', ');
+        const names = others.map(u => this._escHtml(u.user)).join(', ');
         bar.innerHTML = `
             <div class="alert alert-light border-start border-4 border-success d-flex align-items-center m-2 py-1" role="alert">
                 <i class="bi bi-people-fill me-2 text-success"></i>
@@ -3665,7 +4147,9 @@ const DataSync = {
        ================================================================ */
     setupBeforeUnload() {
         window.addEventListener('beforeunload', (e) => {
-            this.unregisterPresence();
+            // #30 — nettoyage best-effort non bloquant (sinon annule a la fermeture) ;
+            // le mecanisme STALE garantit la purge si le DELETE n'aboutit pas.
+            this.unregisterPresenceBeacon();
             if (this._dirty && this._connected) {
                 e.preventDefault();
                 e.returnValue = 'Des modifications non sauvegardees...';
@@ -3699,15 +4183,39 @@ const ActivityLog = {
         if (this._flushing || !this._queue.length || !DataSync._connected) return;
         this._flushing = true;
         const batch = this._queue.splice(0);
+        // Verrouillage optimiste (If-Match) : deux postes qui flushent en meme temps
+        // ne s'ecrasent plus. Sur 412 on relit + reconcatene + reecrit (retry).
+        const MAX_RETRIES = 3;
         try {
-            let current;
-            try { current = await _readJsonFile(VMC_CONFIG.ACTIVITY_LOG_FILE); } catch { current = null; }
-            if (!current || !Array.isArray(current.events)) current = { events: [] };
-            current.events = current.events.concat(batch);
-            if (current.events.length > this.MAX_EVENTS) {
-                current.events = current.events.slice(-this.MAX_EVENTS);
+            let attempt = 0;
+            while (true) {
+                attempt++;
+                let data = null;
+                let eTag = null;
+                try {
+                    const res = await _readJsonFileWithETag(VMC_CONFIG.ACTIVITY_LOG_FILE);
+                    data = res.data;
+                    eTag = res.eTag;
+                } catch { data = null; eTag = null; }
+                if (!data || !Array.isArray(data.events)) data = { events: [] };
+                data.events = data.events.concat(batch);
+                if (data.events.length > this.MAX_EVENTS) {
+                    data.events = data.events.slice(-this.MAX_EVENTS);
+                }
+                const writeOpts = {};
+                if (eTag) writeOpts.ifMatch = eTag;
+                else writeOpts.ifNoneMatch = '*';
+                try {
+                    await _writeJsonFile(VMC_CONFIG.ACTIVITY_LOG_FILE, data, writeOpts);
+                    break;
+                } catch (writeErr) {
+                    if (writeErr?.isPreconditionFailed && attempt < MAX_RETRIES) {
+                        await new Promise(r => setTimeout(r, 150 + Math.random() * 300));
+                        continue;
+                    }
+                    throw writeErr;
+                }
             }
-            await _writeJsonFile(VMC_CONFIG.ACTIVITY_LOG_FILE, current);
         } catch (e) {
             this._queue.unshift(...batch);
             console.warn('ActivityLog: flush echoue', e);
@@ -3747,6 +4255,7 @@ const ActivityLog = {
     },
 
     async clear() {
+        if (typeof DataSync !== 'undefined' && DataSync._isAdminCached === false) { showToast('Accès réservé aux administrateurs', 'warning'); return false; }
         if (!DataSync._connected) { showToast('Connectez-vous à SharePoint pour vider le journal', 'warning'); return false; }
         if (!confirm('Vider tout le journal d\'activité ?\n\nCette action est irréversible. Un seul événement "journal.clear" sera conservé comme trace.')) return false;
         try {
@@ -3808,7 +4317,7 @@ const ActivityLog = {
                 <div class="d-flex gap-2">
                     <button class="btn btn-sm btn-outline-secondary" id="btn-activity-refresh">↻</button>
                     <button class="btn btn-sm btn-outline-primary" id="btn-activity-csv">⬇ CSV</button>
-                    <button class="btn btn-sm btn-outline-danger" id="btn-activity-clear">🗑 Vider</button>
+                    <button class="btn btn-sm btn-outline-danger" id="btn-activity-clear" data-admin-only>🗑 Vider</button>
                 </div>
             </div>
             <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
@@ -3824,6 +4333,8 @@ const ActivityLog = {
             const ok = await this.clear();
             if (ok) this.render(container);
         };
+        // Masquer le bouton Vider (data-admin-only) injecte dynamiquement pour les non-admins
+        if (typeof DataSync !== 'undefined' && DataSync.applyAdminUI) DataSync.applyAdminUI();
     }
 };
 
@@ -3872,19 +4383,19 @@ const ConfigPage = {
                         <div class="row g-3">
                             <div class="col-md-6">
                                 <label class="form-label">Nom</label>
-                                <input type="text" class="form-control" id="cfg-ent-nom" value="${entreprise.nom || ''}">
+                                <input type="text" class="form-control" id="cfg-ent-nom" value="${this._escAttr(entreprise.nom || '')}">
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label">Téléphone</label>
-                                <input type="text" class="form-control" id="cfg-ent-tel" value="${entreprise.telephone || ''}">
+                                <input type="text" class="form-control" id="cfg-ent-tel" value="${this._escAttr(entreprise.telephone || '')}">
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label">Email</label>
-                                <input type="email" class="form-control" id="cfg-ent-email" value="${entreprise.email || ''}">
+                                <input type="email" class="form-control" id="cfg-ent-email" value="${this._escAttr(entreprise.email || '')}">
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label">Adresse</label>
-                                <input type="text" class="form-control" id="cfg-ent-adresse" value="${entreprise.adresse || ''}">
+                                <input type="text" class="form-control" id="cfg-ent-adresse" value="${this._escAttr(entreprise.adresse || '')}">
                             </div>
                         </div>
                         <button type="submit" class="btn btn-primary mt-3">\u2714 Enregistrer</button>
@@ -4031,6 +4542,29 @@ const ConfigPage = {
                     </div>
                 </div></div>
 
+                <!-- Administrateurs -->
+                <div class="card mb-3 border-info"><div class="card-body">
+                    <h6 class="text-info">\u{1F510} Administrateurs</h6>
+                    <p class="text-muted small mb-2">Les administrateurs ont seuls accès à la page Paramètres et à la purge du journal d'activité.</p>
+                    <div class="alert alert-light border small py-2">Si aucun administrateur n'est défini, tous les utilisateurs ont accès aux paramètres. Ajoutez-vous comme administrateur pour restreindre l'accès.</div>
+                    <div id="cfg-admins-list" class="mb-2"></div>
+                    <div class="row g-2 align-items-end">
+                        <div class="col-md-5">
+                            <label class="form-label small mb-1">Choisir un observateur connu</label>
+                            <select class="form-select form-select-sm" id="cfg-admin-select">
+                                <option value="">— sélectionner —</option>
+                            </select>
+                        </div>
+                        <div class="col-md-5">
+                            <label class="form-label small mb-1">ou saisir un nom</label>
+                            <input type="text" class="form-control form-control-sm" id="cfg-admin-input" placeholder="Nom exact de l'utilisateur">
+                        </div>
+                        <div class="col-md-2 d-grid">
+                            <button class="btn btn-sm btn-info" id="btn-admin-add">➕ Ajouter</button>
+                        </div>
+                    </div>
+                </div></div>
+
                 <!-- Aide / Tutoriel -->
                 <div class="card mb-3 border-success"><div class="card-body">
                     <h6 class="text-success"><i class="bi bi-question-circle"></i> Guide d'utilisation</h6>
@@ -4104,6 +4638,74 @@ const ConfigPage = {
         this._bindEmailTemplate(emailTpl);
         this._bindDonnees();
         this._bindActivityLog();
+        this._bindAdmins(conducteurs);
+    },
+
+    /* --- Gestion des administrateurs --- */
+    async _renderAdminsList() {
+        const wrap = document.getElementById('cfg-admins-list');
+        if (!wrap) return;
+        const admins = await DataSync.loadAdmins();
+        if (!admins.length) {
+            wrap.innerHTML = '<p class="text-muted small fst-italic mb-0">Aucun administrateur défini (accès ouvert à tous).</p>';
+            return;
+        }
+        wrap.innerHTML = admins.map((name, i) => `
+            <span class="badge bg-info-subtle text-info-emphasis border border-info me-1 mb-1 d-inline-flex align-items-center" style="font-size:.85rem">
+                ${this._escHtml(name)}
+                <button type="button" class="btn-close btn-close-sm ms-2" style="font-size:.6rem" title="Retirer" data-admin-remove="${i}"></button>
+            </span>`).join('');
+        wrap.querySelectorAll('[data-admin-remove]').forEach(btn => {
+            btn.onclick = () => this._removeAdmin(Number(btn.dataset.adminRemove));
+        });
+    },
+
+    async _bindAdmins(conducteurs) {
+        // Peupler le select avec les observateurs connus
+        const sel = document.getElementById('cfg-admin-select');
+        if (sel) {
+            sel.innerHTML = '<option value="">— sélectionner —</option>' +
+                (conducteurs || []).map(c => `<option value="${this._escAttr(c.nom || '')}">${this._escHtml(c.nom || '')}</option>`).join('');
+        }
+        const addBtn = document.getElementById('btn-admin-add');
+        if (addBtn) {
+            addBtn.onclick = async () => {
+                const fromSelect = (sel?.value || '').trim();
+                const input = document.getElementById('cfg-admin-input');
+                const fromInput = (input?.value || '').trim();
+                const name = fromInput || fromSelect;
+                if (!name) { showToast('Sélectionnez ou saisissez un nom', 'warning'); return; }
+                await this._addAdmin(name);
+                if (input) input.value = '';
+                if (sel) sel.value = '';
+            };
+        }
+        await this._renderAdminsList();
+    },
+
+    async _addAdmin(name) {
+        const admins = await DataSync.loadAdmins();
+        const norm = (s) => (s || '').toString().trim().toLowerCase();
+        if (admins.some(a => norm(a) === norm(name))) { showToast('Déjà administrateur', 'info'); return; }
+        admins.push(name.trim());
+        await db.config.put({ id: '_admins', value: admins });
+        DataSync.markDirty();
+        await DataSync.applyAdminUI();
+        await this._renderAdminsList();
+        showToast('Administrateur ajouté');
+    },
+
+    async _removeAdmin(index) {
+        const admins = await DataSync.loadAdmins();
+        if (index < 0 || index >= admins.length) return;
+        const removed = admins[index];
+        if (!confirm(`Retirer "${removed}" de la liste des administrateurs ?`)) return;
+        admins.splice(index, 1);
+        await db.config.put({ id: '_admins', value: admins });
+        DataSync.markDirty();
+        await DataSync.applyAdminUI();
+        await this._renderAdminsList();
+        showToast('Administrateur retiré');
     },
 
     _bindActivityLog() {
@@ -4135,9 +4737,9 @@ const ConfigPage = {
         tbody.innerHTML = conducteurs.map(c => `
             <tr>
                 <td>${c.id}</td>
-                <td>${c.nom || ''}</td>
-                <td>${c.email ? `<span class="text-muted small">${c.email}</span>` : '<span class="text-muted small fst-italic">non renseigné</span>'}</td>
-                <td>${c.agence || ''}</td>
+                <td>${this._escHtml(c.nom || '')}</td>
+                <td>${c.email ? `<span class="text-muted small">${this._escHtml(c.email)}</span>` : '<span class="text-muted small fst-italic">non renseigné</span>'}</td>
+                <td>${this._escHtml(c.agence || '')}</td>
                 <td>
                     <button class="btn btn-sm btn-outline-primary btn-edit-cond" data-id="${c.id}">\u270E</button>
                     <button class="btn btn-sm btn-outline-danger btn-del-cond" data-id="${c.id}">\u{1F5D1}</button>
@@ -4182,9 +4784,9 @@ const ConfigPage = {
             <form id="form-cond">
             <div class="modal-body">
                 <div class="mb-2"><label class="form-label">ID</label><input type="number" class="form-control" id="cond-id" value="${isEdit ? cond.id : nextId}" readonly></div>
-                <div class="mb-2"><label class="form-label">Nom *</label><input type="text" class="form-control" id="cond-nom" value="${cond?.nom || ''}" required></div>
-                <div class="mb-2"><label class="form-label">Email</label><input type="email" class="form-control" id="cond-email" value="${cond?.email || ''}" placeholder="initialnom@agriwatt.fr"></div>
-                <div class="mb-2"><label class="form-label">Agence</label><input type="text" class="form-control" id="cond-agence" value="${cond?.agence || ''}"></div>
+                <div class="mb-2"><label class="form-label">Nom *</label><input type="text" class="form-control" id="cond-nom" value="${this._escAttr(cond?.nom || '')}" required></div>
+                <div class="mb-2"><label class="form-label">Email</label><input type="email" class="form-control" id="cond-email" value="${this._escAttr(cond?.email || '')}" placeholder="initialnom@agriwatt.fr"></div>
+                <div class="mb-2"><label class="form-label">Agence</label><input type="text" class="form-control" id="cond-agence" value="${this._escAttr(cond?.agence || '')}"></div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler</button>
@@ -4194,6 +4796,9 @@ const ConfigPage = {
         </div></div></div>`);
 
         const modal = new bootstrap.Modal(document.getElementById(id));
+        const modalEl = document.getElementById(id);
+        modalEl.addEventListener('shown.bs.modal', () => DataSync._beginEditing());
+        modalEl.addEventListener('hidden.bs.modal', () => DataSync._endEditing());
         modal.show();
 
         document.getElementById('form-cond').onsubmit = async e => {
@@ -4247,6 +4852,12 @@ const ConfigPage = {
 
         const editorContainer = card.querySelector('.grille-editor');
         this._populateGrilleEditor(editorContainer, grille);
+
+        // BUG #19 — l'editeur de grille config est une zone de saisie permanente (pas une
+        // modale) : marquer l'edition active tant qu'un champ a le focus, pour eviter
+        // qu'un poll ne remplace la base et efface la saisie en cours.
+        editorContainer.addEventListener('focusin', () => DataSync._beginEditing());
+        editorContainer.addEventListener('focusout', () => DataSync._endEditing());
 
         // Ajouter une categorie
         card.querySelector('.btn-add-section').onclick = () => {
@@ -4318,6 +4929,9 @@ const ConfigPage = {
         </div></div></div>`);
 
         const modal = new bootstrap.Modal(document.getElementById(id));
+        const modalEl = document.getElementById(id);
+        modalEl.addEventListener('shown.bs.modal', () => DataSync._beginEditing());
+        modalEl.addEventListener('hidden.bs.modal', () => DataSync._endEditing());
         modal.show();
         setTimeout(() => document.getElementById('grille-type-label')?.focus(), 300);
 
@@ -4329,6 +4943,10 @@ const ConfigPage = {
             const typeId = label.toLowerCase()
                 .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
                 .replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+            if (!typeId) {
+                showToast('Nom de type invalide, utilisez des lettres ou des chiffres', 'danger');
+                return;
+            }
             if (currentTypes.some(t => t.id === typeId)) {
                 showToast('Ce type existe déjà', 'danger');
                 return;
@@ -4399,6 +5017,10 @@ const ConfigPage = {
 
     _escHtml(str) {
         return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    },
+
+    _escAttr(s) {
+        return (s || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     },
 
     /* --- Modele email --- */
@@ -4566,6 +5188,9 @@ const ConfigPage = {
    dashboard.js – Tableau de bord / KPI (modele Observateurs)
    ============================================================= */
 const DashboardPage = {
+    _escHtml(str) {
+        return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    },
     async render(container) {
         const now   = new Date();
         const annee = now.getFullYear();
@@ -4640,7 +5265,7 @@ const DashboardPage = {
                             <span>Visites réalisées</span><span class="fw-bold">${tauxConf}%</span>
                         </div>
                         <div class="progress" style="height:20px">
-                            <div class="progress-bar bg-primary" style="width:${tauxConf}%">${tauxConf}%</div>
+                            <div class="progress-bar bg-primary" style="width:${Math.min(100, tauxConf)}%">${tauxConf}%</div>
                         </div>
                         <div class="small text-muted mt-2">${nbRealisees} réalisées sur ${totalPrevues} prévues, ${nbPlanifiees} restantes, ${nbRetard} en retard</div>
                     </div>
@@ -4753,8 +5378,8 @@ const DashboardPage = {
                 ? '<span class="badge bg-danger">En retard</span>'
                 : '<span class="badge bg-warning text-dark">Planifié</span>';
             return `<tr style="cursor:pointer" data-cid="${v.conducteurId}" class="row-visite">
-                <td class="fw-bold">${cond?.nom || v.conducteurNom || '?'}</td>
-                <td>${cond?.agence || ''}</td>
+                <td class="fw-bold">${this._escHtml(cond?.nom || v.conducteurNom || '?')}</td>
+                <td>${this._escHtml(cond?.agence || '')}</td>
                 <td>${this._fmtDate(v.datePrevue)}</td>
                 <td>${badge}</td>
             </tr>`;
@@ -4777,9 +5402,9 @@ const DashboardPage = {
         tbody.innerHTML = ouvertes.map(a => {
             const vmc = vmcMap[a.vmcId];
             return `<tr>
-                <td>${vmc ? vmc.conducteurNom + ' (' + this._fmtDate(vmc.date) + ')' : '-'}</td>
-                <td class="text-truncate" style="max-width:200px">${a.description || ''}</td>
-                <td>${a.responsable || '-'}</td>
+                <td>${vmc ? this._escHtml(vmc.conducteurNom) + ' (' + this._fmtDate(vmc.date) + ')' : '-'}</td>
+                <td class="text-truncate" style="max-width:200px">${this._escHtml(a.description || '')}</td>
+                <td>${this._escHtml(a.responsable || '-')}</td>
                 <td><span class="badge bg-${statutColors[a.statut] || 'secondary'}">${a.statut || '-'}</span></td>
             </tr>`;
         }).join('');
@@ -4800,6 +5425,12 @@ const DashboardPage = {
    planning.js – Planning annuel (Observateurs x Mois)
    ============================================================= */
 const PlanningPage = {
+    _escHtml(str) {
+        return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    },
+    _escAttr(s) {
+        return (s || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    },
     _annee: new Date().getFullYear(),
     _filtreAgence: '',
 
@@ -4828,7 +5459,7 @@ const PlanningPage = {
                 </div>
                 <select class="form-select form-select-sm" id="filtre-agence" style="width:auto">
                     <option value="">Toutes agences</option>
-                    ${agences.map(a => `<option value="${a}" ${this._filtreAgence === a ? 'selected' : ''}>${a}</option>`).join('')}
+                    ${agences.map(a => `<option value="${this._escAttr(a)}" ${this._filtreAgence === a ? 'selected' : ''}>${this._escHtml(a)}</option>`).join('')}
                 </select>
                 <button class="btn btn-outline-primary btn-sm" id="btn-bulk-ics" title="Générer les invitations annuelles">✉️ <span class="ms-1">Invitations</span></button>
             </div>
@@ -4879,8 +5510,8 @@ const PlanningPage = {
         });
 
         conducteurs.forEach(cond => {
-            let row = `<td class="sticky-col fw-bold">${cond.nom}</td>`;
-            row += `<td class="sticky-col-2 text-muted small">${cond.agence || ''}</td>`;
+            let row = `<td class="sticky-col fw-bold">${this._escHtml(cond.nom)}</td>`;
+            row += `<td class="sticky-col-2 text-muted small">${this._escHtml(cond.agence || '')}</td>`;
 
             for (let m = 1; m <= 12; m++) {
                 const vList = idx[cond.id + '-' + m] || [];
@@ -4981,7 +5612,7 @@ const PlanningPage = {
         document.body.insertAdjacentHTML('beforeend', `
         <div class="modal fade" id="${id}" tabindex="-1"><div class="modal-dialog modal-sm"><div class="modal-content">
             <div class="modal-header py-2">
-                <h6 class="modal-title">📅 ${nom}</h6>
+                <h6 class="modal-title">📅 ${this._escHtml(nom)}</h6>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
@@ -5085,11 +5716,11 @@ const PlanningPage = {
                         <thead><tr><th>Observateur</th><th>Agence</th><th class="text-center">Visites</th><th class="text-center">Email</th><th></th></tr></thead>
                         <tbody>
                             ${lignes.map(l => `<tr>
-                                <td class="fw-bold">${l.cond.nom}</td>
-                                <td class="text-muted small">${l.cond.agence || ''}</td>
+                                <td class="fw-bold">${this._escHtml(l.cond.nom)}</td>
+                                <td class="text-muted small">${this._escHtml(l.cond.agence || '')}</td>
                                 <td class="text-center"><span class="badge bg-primary">${l.nb}</span></td>
                                 <td class="text-center">${l.hasEmail
-                                    ? `<span class="text-success small" title="${l.cond.email}">✅</span>`
+                                    ? `<span class="text-success small" title="${this._escAttr(l.cond.email)}">✅</span>`
                                     : '<span class="text-danger" title="Email manquant">❌</span>'}</td>
                                 <td class="text-end">
                                     <button class="btn btn-outline-primary btn-sm btn-dl-eml" data-cid="${l.cond.id}" ${!l.hasEmail ? 'disabled title="Email manquant"' : ''}>✉️ .eml</button>
@@ -5143,6 +5774,58 @@ const PlanningPage = {
         });
     },
 
+    /* --- Helpers anti-injection / encodage (#14) --- */
+    // Neutralise l'injection d'en-tetes MIME : retire CR/LF et trim.
+    _sanitizeHeader(s) {
+        return String(s == null ? '' : s).replace(/[\r\n]+/g, ' ').trim();
+    },
+    // Validation email basique (sinon fallback).
+    _isValidEmail(s) {
+        return typeof s === 'string' && /^[^\s@<>"]+@[^\s@<>".]+\.[^\s@<>"]+$/.test(s.trim());
+    },
+    // Echappement RFC5545 d'une valeur de propriete ICS.
+    _escapeICS(s) {
+        return String(s == null ? '' : s)
+            .replace(/\\/g, '\\\\')
+            .replace(/;/g, '\\;')
+            .replace(/,/g, '\\,')
+            .replace(/\r\n|\r|\n/g, '\\n');
+    },
+    // Repli de ligne ICS a ~75 octets (RFC5545 : continuation par espace).
+    _foldICS(line) {
+        if (line.length <= 75) return line;
+        const out = [];
+        let i = 0;
+        out.push(line.slice(0, 75));
+        i = 75;
+        while (i < line.length) {
+            out.push(' ' + line.slice(i, i + 74));
+            i += 74;
+        }
+        return out.join('\r\n');
+    },
+    // Encodage quoted-printable d'un corps texte (UTF-8), avec soft line breaks.
+    _qpEncode(str) {
+        const bytes = new TextEncoder().encode(str);
+        let out = '';
+        let lineLen = 0;
+        const pushTok = (tok) => {
+            if (lineLen + tok.length > 75) { out += '=\r\n'; lineLen = 0; }
+            out += tok; lineLen += tok.length;
+        };
+        for (let i = 0; i < bytes.length; i++) {
+            const b = bytes[i];
+            if (b === 13 && bytes[i + 1] === 10) { out += '\r\n'; lineLen = 0; i++; continue; }
+            if (b === 10) { out += '\r\n'; lineLen = 0; continue; }
+            if (b === 61 || b < 32 || b > 126) {
+                pushTok('=' + b.toString(16).toUpperCase().padStart(2, '0'));
+            } else {
+                pushTok(String.fromCharCode(b));
+            }
+        }
+        return out;
+    },
+
     _generateBulkIcs(visites, cond, entreprise) {
         const now = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
         const organizerEmail = entreprise.email || 'noreply@agriwatt.fr';
@@ -5156,21 +5839,24 @@ const PlanningPage = {
             'METHOD:PUBLISH'
         ];
 
+        const esc = (s) => this._escapeICS(s);
+        const fold = (s) => this._foldICS(s);
         visites.forEach(v => {
             const date = v.datePrevue.replace(/-/g, '');
             const uid = `vmc-${v.id}-${cond.id}@vmcmanager.agriwatt`;
+            const attEmail = this._isValidEmail(cond.email) ? cond.email : 'noemail@agriwatt.fr';
             lines.push(
                 'BEGIN:VEVENT',
                 `UID:${uid}`,
                 `DTSTAMP:${now}`,
                 `DTSTART:${date}T090000`,
                 `DTEND:${date}T100000`,
-                `SUMMARY:VMC - Visite Manageriale de Chantier`,
-                `DESCRIPTION:Visite Manageriale de Chantier prévue pour ${cond.nom} (${cond.agence || ''}).\\nMerci de confirmer votre disponibilite.`,
-                `ORGANIZER;CN=${organizerName}:mailto:${organizerEmail}`,
-                `ATTENDEE;ROLE=REQ-PARTICIPANT;RSVP=TRUE;CN=${cond.nom}:mailto:${cond.email || 'noemail@agriwatt.fr'}`,
+                fold(`SUMMARY:VMC - Visite Manageriale de Chantier`),
+                fold(`DESCRIPTION:Visite Manageriale de Chantier prévue pour ${esc(cond.nom)} (${esc(cond.agence || '')}).\\nMerci de confirmer votre disponibilite.`),
+                fold(`ORGANIZER;CN=${esc(organizerName)}:mailto:${organizerEmail}`),
+                fold(`ATTENDEE;ROLE=REQ-PARTICIPANT;RSVP=TRUE;CN=${esc(cond.nom)}:mailto:${attEmail}`),
                 'STATUS:CONFIRMED',
-                `LOCATION:${cond.agence || ''}`,
+                fold(`LOCATION:${esc(cond.agence || '')}`),
                 'BEGIN:VALARM',
                 'TRIGGER:-P1D',
                 'ACTION:DISPLAY',
@@ -5185,12 +5871,14 @@ const PlanningPage = {
     },
 
     _generateEml(cond, entreprise, icsContent, visites, emailTpl) {
-        const fromEmail = entreprise.email || 'noreply@agriwatt.fr';
-        const fromName = entreprise.nom || 'Agriwatt';
-        const toEmail = cond.email;
-        const toName = cond.nom;
+        // #14 — assainissement des champs interpolés dans les en-têtes MIME
+        const fromEmailRaw = entreprise.email || 'noreply@agriwatt.fr';
+        const fromEmail = this._isValidEmail(fromEmailRaw) ? fromEmailRaw : 'noreply@agriwatt.fr';
+        const fromName = this._sanitizeHeader(entreprise.nom || 'Agriwatt');
+        const toEmail = this._isValidEmail(cond.email) ? cond.email : 'noemail@agriwatt.fr';
+        const toName = this._sanitizeHeader(cond.nom);
         const boundary = '----=_VMCManager_' + Date.now();
-        const icsFilename = `VMC_${this._annee}_${cond.nom.replace(/\s+/g, '_')}.ics`;
+        const icsFilename = `VMC_${this._annee}_${this._sanitizeHeader(cond.nom).replace(/\s+/g, '_')}.ics`;
 
         // Construire la liste des dates
         const moisNoms = ['janvier','fevrier','mars','avril','mai','juin','juillet','aout','septembre','octobre','novembre','decembre'];
@@ -5227,11 +5915,12 @@ const PlanningPage = {
         const tplSubject = (emailTpl && emailTpl.sujet) || defaultSubject;
         const tplBody = (emailTpl && emailTpl.corps) || defaultBody;
 
-        // Remplacer les variables dans le sujet
+        // Remplacer les variables dans le sujet (puis assainir l'en-tete)
         let subject = tplSubject;
         for (const [k, v] of Object.entries(vars)) {
             subject = subject.split(k).join(v);
         }
+        subject = this._sanitizeHeader(subject);
 
         // Remplacer les variables dans le corps (texte brut)
         let bodyText = tplBody;
@@ -5254,6 +5943,12 @@ const PlanningPage = {
         const icsBase64 = btoa(unescape(encodeURIComponent(icsContent)));
         const icsBase64Lines = icsBase64.match(/.{1,76}/g).join('\r\n');
 
+        // #14b — encoder reellement les corps en quoted-printable (UTF-8) :
+        // les en-tetes declarent quoted-printable, le contenu doit l'etre aussi
+        // sinon les accents sont casses.
+        const bodyTextQp = this._qpEncode(bodyText);
+        const bodyHtmlQp = this._qpEncode(bodyHtml);
+
         const eml = [
             `From: ${fromName} <${fromEmail}>`,
             `To: ${toName} <${toEmail}>`,
@@ -5266,16 +5961,16 @@ const PlanningPage = {
             'Content-Type: multipart/alternative; boundary="alt_' + boundary + '"',
             '',
             '--alt_' + boundary,
-            'Content-Type: text/plain; charset=utf-8',
+            'Content-Type: text/plain; charset=UTF-8',
             'Content-Transfer-Encoding: quoted-printable',
             '',
-            bodyText,
+            bodyTextQp,
             '',
             '--alt_' + boundary,
-            'Content-Type: text/html; charset=utf-8',
+            'Content-Type: text/html; charset=UTF-8',
             'Content-Transfer-Encoding: quoted-printable',
             '',
-            bodyHtml,
+            bodyHtmlQp,
             '',
             '--alt_' + boundary + '--',
             '',
@@ -5337,6 +6032,9 @@ const PlanningPage = {
         const organizerEmail = entreprise.email || 'noreply@agriwatt.fr';
         const organizerName = entreprise.nom || 'Agriwatt';
 
+        const esc = (s) => this._escapeICS(s);
+        const fold = (s) => this._foldICS(s);
+        const attEmail = this._isValidEmail(cond.email) ? cond.email : 'noemail@agriwatt.fr';
         const lines = [
             'BEGIN:VCALENDAR',
             'VERSION:2.0',
@@ -5348,12 +6046,12 @@ const PlanningPage = {
             `DTSTAMP:${now}`,
             `DTSTART:${date}T090000`,
             `DTEND:${date}T100000`,
-            `SUMMARY:VMC - Visite Manageriale de Chantier`,
-            `DESCRIPTION:Visite Manageriale de Chantier prévue pour ${cond.nom} (${cond.agence || ''}).\\nMerci de confirmer votre disponibilite.`,
-            `ORGANIZER;CN=${organizerName}:mailto:${organizerEmail}`,
-            `ATTENDEE;ROLE=REQ-PARTICIPANT;RSVP=TRUE;CN=${cond.nom}:mailto:${cond.email}`,
+            fold(`SUMMARY:VMC - Visite Manageriale de Chantier`),
+            fold(`DESCRIPTION:Visite Manageriale de Chantier prévue pour ${esc(cond.nom)} (${esc(cond.agence || '')}).\\nMerci de confirmer votre disponibilite.`),
+            fold(`ORGANIZER;CN=${esc(organizerName)}:mailto:${organizerEmail}`),
+            fold(`ATTENDEE;ROLE=REQ-PARTICIPANT;RSVP=TRUE;CN=${esc(cond.nom)}:mailto:${attEmail}`),
             'STATUS:CONFIRMED',
-            `LOCATION:${cond.agence || ''}`,
+            fold(`LOCATION:${esc(cond.agence || '')}`),
             'BEGIN:VALARM',
             'TRIGGER:-P1D',
             'ACTION:DISPLAY',
@@ -5412,6 +6110,13 @@ const VmcFormPage = {
                 // Route edition : le parametre est un VMC ID
                 vmc = await DB.getVmc(Number(visiteIdOrVmcId));
                 if (vmc) isEdit = true;
+                else {
+                    // #31 — deep-link vers une VMC supprimee/inexistante :
+                    // ne pas ouvrir un formulaire vide "Nouvelle VMC", rediriger.
+                    showToast('VMC introuvable (elle a peut-être été supprimée).', 'warning');
+                    location.hash = '#vmc-list';
+                    return;
+                }
             } else {
                 // Route nouvelle VMC depuis planning : le parametre est un visite ID
                 visite = await DB.getVisite(Number(visiteIdOrVmcId));
@@ -5423,6 +6128,9 @@ const VmcFormPage = {
         }
 
         const vmcType = vmc?.type || (grilleTypes.length ? grilleTypes[0].id : 'chantier');
+        // Si le type d'origine de la VMC n'existe plus dans la config, conserver
+        // une option de secours pour ne pas le reaffecter silencieusement au submit.
+        const typeSupprime = isEdit && vmc?.type && !grilleTypes.some(t => t.id === vmc.type);
         // Toujours récupérer le template pour connaître la liste complète des scénarios
         const template = await this._getTemplateForType(vmcType);
         const scenarios = [...new Set(template.map(g => g.categorie))];
@@ -5440,7 +6148,7 @@ const VmcFormPage = {
 
         container.innerHTML = `
         <h4 class="mb-3">✏️ ${isEdit ? 'Modifier la VMC' : 'Nouvelle VMC'}</h4>
-        ${visite ? `<div class="alert alert-info small mb-3">ℹ️ Visite planifiée pour <strong>${visite.conducteurNom}</strong> le ${this._fmtDate(visite.datePrevue)}</div>` : ''}
+        ${visite ? `<div class="alert alert-info small mb-3">ℹ️ Visite planifiée pour <strong>${this._escHtml(visite.conducteurNom)}</strong> le ${this._fmtDate(visite.datePrevue)}</div>` : ''}
 
         <form id="form-vmc">
         <div class="row g-2 g-md-3 mb-4">
@@ -5452,7 +6160,8 @@ const VmcFormPage = {
                         <div class="mb-2">
                             <label class="form-label">Type *</label>
                             <select class="form-select" id="vmc-type" required>
-                                ${grilleTypes.map(gt => `<option value="${gt.id}" ${vmcType === gt.id ? 'selected' : ''}>${this._escHtml(gt.label)}</option>`).join('')}
+                                ${typeSupprime ? `<option value="${this._escAttr(vmc.type)}" selected>(type supprimé) ${this._escHtml(vmc.type)}</option>` : ''}
+                                ${grilleTypes.map(gt => `<option value="${gt.id}" ${!typeSupprime && vmcType === gt.id ? 'selected' : ''}>${this._escHtml(gt.label)}</option>`).join('')}
                             </select>
                         </div>
                         <div class="mb-2" id="vmc-scenario-wrapper" ${hasScenarios ? '' : 'style="display:none"'}>
@@ -5466,16 +6175,16 @@ const VmcFormPage = {
                             <label class="form-label">Observateur *</label>
                             <select class="form-select" id="vmc-conducteur" required>
                                 <option value="" ${!selectedConducteurId ? 'selected' : ''}>-- Sélectionner --</option>
-                                ${conducteurs.map(c => `<option value="${c.id}" ${Number(c.id) === Number(selectedConducteurId) && selectedConducteurId ? 'selected' : ''}>${c.nom} (${c.agence})</option>`).join('')}
+                                ${conducteurs.map(c => `<option value="${c.id}" ${Number(c.id) === Number(selectedConducteurId) && selectedConducteurId ? 'selected' : ''}>${this._escHtml(c.nom)} (${this._escHtml(c.agence)})</option>`).join('')}
                             </select>
                         </div>
                         <div class="mb-2">
                             <label class="form-label">Site / Lieu</label>
-                            <input type="text" class="form-control" id="vmc-site" value="${vmc?.site || ''}" placeholder="Nom du chantier ou lieu">
+                            <input type="text" class="form-control" id="vmc-site" value="${this._escAttr(vmc?.site || '')}" placeholder="Nom du chantier ou lieu">
                         </div>
                         <div class="mb-2">
                             <label class="form-label">Personne observée</label>
-                            <input type="text" class="form-control" id="vmc-observe-nom" value="${vmc?.observeNom || (vmc?.observePrenom ? ((vmc.observePrenom || '') + ' ' + (vmc.observeNom || '')).trim() : '')}" placeholder="Nom et prenom">
+                            <input type="text" class="form-control" id="vmc-observe-nom" value="${this._escAttr(vmc?.observeNom || (vmc?.observePrenom ? ((vmc.observePrenom || '') + ' ' + (vmc.observeNom || '')).trim() : ''))}" placeholder="Nom et prenom">
                         </div>
                         <div class="mb-2">
                             <label class="form-label">Date *</label>
@@ -5633,18 +6342,29 @@ const VmcFormPage = {
 
     _renderGrille(grille) {
         const tbody = document.getElementById('grille-body');
+        // Regrouper par categorie (Map preserve l'ordre d'apparition)
+        // pour que chaque en-tete n'apparaisse qu'une seule fois,
+        // meme si les items d'une categorie ne sont pas contigus.
+        const groupes = new Map();
+        grille.forEach(g => {
+            if (!groupes.has(g.categorie)) groupes.set(g.categorie, []);
+            groupes.get(g.categorie).push(g);
+        });
+        const ordered = [];
+        groupes.forEach(items => { items.forEach(g => ordered.push(g)); });
+
         let lastCat = '';
         let html = '';
-        grille.forEach((g, i) => {
+        ordered.forEach((g, i) => {
             const showCat = g.categorie !== lastCat;
             lastCat = g.categorie;
             const uid = 'gr-' + i;
             if (showCat) {
-                html += `<tr class="grille-cat-header"><td colspan="4">📁 ${g.categorie}</td></tr>`;
+                html += `<tr class="grille-cat-header"><td colspan="4">📁 ${this._escHtml(g.categorie)}</td></tr>`;
             }
             html += `<tr class="grille-data-row">
-                <td class="grille-cat-cell ${showCat ? 'fw-bold' : 'text-muted small'}">${showCat ? g.categorie : ''}</td>
-                <td class="grille-item-cell">${g.item}</td>
+                <td class="grille-cat-cell ${showCat ? 'fw-bold' : 'text-muted small'}">${showCat ? this._escHtml(g.categorie) : ''}</td>
+                <td class="grille-item-cell">${this._escHtml(g.item)}</td>
                 <td class="text-center grille-result-cell">
                     <div class="btn-group btn-group-sm" role="group">
                         <input type="radio" class="btn-check" name="${uid}" id="${uid}-ok" value="OK" ${g.resultat === 'OK' ? 'checked' : ''}>
@@ -5883,6 +6603,42 @@ const VmcFormPage = {
         });
     },
 
+    // #15 — Resout le base64 d'affichage d'une photo : utilise `data` si present,
+    // sinon telecharge depuis `path` (lazy) puis met en cache sur l'objet photo
+    // (en memoire). Retourne le dataURL, ou null si indisponible.
+    async _resolvePhotoData(photo) {
+        if (!photo) return null;
+        if (photo.data) return photo.data;
+        if (!photo.path) return null;
+        // Eviter les telechargements concurrents multiples
+        if (photo._loadingPromise) return photo._loadingPromise;
+        photo._loadingPromise = (async () => {
+            try {
+                const dataUrl = await _downloadFileAsDataURL(photo.path);
+                photo.data = dataUrl; // cache memoire (et reutilise au prochain save/merge)
+                return dataUrl;
+            } catch (e) {
+                console.warn('Photo: telechargement echoue', photo.path, e);
+                return null;
+            } finally {
+                photo._loadingPromise = null;
+            }
+        })();
+        return photo._loadingPromise;
+    },
+
+    // #15 — Charge en lazy les vignettes des photos externalisees (path sans data)
+    _lazyLoadThumbs() {
+        this._photos.forEach((p, i) => {
+            if (p.data || !p.path) return;
+            this._resolvePhotoData(p).then(dataUrl => {
+                if (!dataUrl) return;
+                const img = document.querySelector(`#photo-grid img[data-photo-idx="${i}"]`);
+                if (img) { img.src = dataUrl; img.classList.remove('photo-loading'); }
+            });
+        });
+    },
+
     _renderPhotos() {
         const grid = document.getElementById('photo-grid');
         const empty = document.getElementById('photo-empty');
@@ -5897,14 +6653,24 @@ const VmcFormPage = {
         }
 
         empty.classList.add('d-none');
-        grid.innerHTML = this._photos.map((p, i) => `
+        // Placeholder transparent 1x1 tant que l'image externalisee n'est pas chargee
+        const PLACEHOLDER = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
+        grid.innerHTML = this._photos.map((p, i) => {
+            const hasData = !!p.data;
+            const src = hasData ? p.data : PLACEHOLDER;
+            const cls = hasData ? '' : ' photo-loading';
+            const bg = hasData ? '' : 'background:#e9ecef;';
+            return `
             <div class="photo-thumb position-relative" style="width:100px;height:100px">
-                <img src="${p.data}" class="rounded" style="width:100%;height:100%;object-fit:cover;cursor:pointer" onclick="VmcFormPage._previewPhoto(${i})" title="${p.name || 'Photo ' + (i+1)}">
+                <img src="${src}" data-photo-idx="${i}" class="rounded${cls}" style="width:100%;height:100%;object-fit:cover;cursor:pointer;${bg}" onclick="VmcFormPage._previewPhoto(${i})" title="${this._escAttr(p.name || 'Photo ' + (i+1))}">
                 <button type="button" class="btn btn-sm btn-danger position-absolute top-0 end-0 rounded-circle d-flex align-items-center justify-content-center" style="width:24px;height:24px;padding:0;font-size:0.7rem" onclick="VmcFormPage._removePhoto(${i})">
                     ✕
                 </button>
-            </div>
-        `).join('');
+            </div>`;
+        }).join('');
+
+        // Charger en arriere-plan les vignettes externalisees
+        this._lazyLoadThumbs();
     },
 
     _removePhoto(index) {
@@ -5912,25 +6678,43 @@ const VmcFormPage = {
         this._renderPhotos();
     },
 
-    _previewPhoto(index) {
+    async _previewPhoto(index) {
         const photo = this._photos[index];
         if (!photo) return;
 
         const id = 'modal-photo-preview';
         document.getElementById(id)?.remove();
 
+        const PLACEHOLDER = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
+        const initialSrc = photo.data || PLACEHOLDER;
+        const needsLoad = !photo.data && !!photo.path;
+
         document.body.insertAdjacentHTML('beforeend', `
         <div class="modal fade" id="${id}" tabindex="-1"><div class="modal-dialog modal-lg modal-dialog-centered"><div class="modal-content">
             <div class="modal-header py-2">
-                <h6 class="modal-title">🖼️ ${photo.name || 'Photo ' + (index + 1)}</h6>
+                <h6 class="modal-title">🖼️ ${this._escHtml(photo.name || 'Photo ' + (index + 1))}</h6>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body text-center p-0">
-                <img src="${photo.data}" class="img-fluid">
+                ${needsLoad ? '<div id="photo-preview-spinner" class="py-5"><span class="spinner-border"></span><div class="small text-muted mt-2">Chargement de la photo…</div></div>' : ''}
+                <img id="photo-preview-img" src="${initialSrc}" class="img-fluid${needsLoad ? ' d-none' : ''}">
             </div>
         </div></div></div>`);
 
         new bootstrap.Modal(document.getElementById(id)).show();
+
+        if (needsLoad) {
+            const dataUrl = await this._resolvePhotoData(photo);
+            const spinner = document.getElementById('photo-preview-spinner');
+            const img = document.getElementById('photo-preview-img');
+            if (spinner) spinner.remove();
+            if (img) {
+                if (dataUrl) { img.src = dataUrl; img.classList.remove('d-none'); }
+                else {
+                    img.insertAdjacentHTML('afterend', '<div class="alert alert-warning m-3">Image indisponible (non chargée).</div>');
+                }
+            }
+        }
     },
 
     _setupSignaturePad(canvasId, btnId, existingData) {
@@ -5961,6 +6745,9 @@ const VmcFormPage = {
 
         document.getElementById(btnId).onclick = () => pad.clear();
 
+        // #11 — Fuite de listeners resize : on rattache le listener a un AbortController
+        // partage par le formulaire, abort() au teardown → plus d'accumulation.
+        this._sigResizeAbort = this._sigResizeAbort || new AbortController();
         window.addEventListener('resize', () => {
             const data = pad.toDataURL();
             const rW = wrapper.clientWidth;
@@ -5971,12 +6758,26 @@ const VmcFormPage = {
             canvas.style.height = rH + 'px';
             canvas.getContext('2d').scale(ratio, ratio);
             pad.fromDataURL(data, { ratio });
-        }, { once: false });
+        }, { signal: this._sigResizeAbort.signal });
 
         return pad;
     },
 
+    // #11 — Detache les listeners resize des pads de signature (a appeler avant
+    // de (re)construire un formulaire pour eviter l'accumulation).
+    _teardownSignatures() {
+        if (this._sigResizeAbort) {
+            try { this._sigResizeAbort.abort(); } catch (_) { /* ignore */ }
+            this._sigResizeAbort = null;
+        }
+        this._signaturePadObservateur = null;
+        this._signaturePadObserve = null;
+    },
+
     _initSignatures(existingObservateur, existingObserve) {
+        // #11 — repartir d'un AbortController neuf : on coupe les anciens listeners.
+        this._teardownSignatures();
+        this._sigResizeAbort = new AbortController();
         this._signaturePadObservateur = this._setupSignaturePad('signature-canvas-observateur', 'btn-clear-sig-observateur', existingObservateur);
         this._signaturePadObserve = this._setupSignaturePad('signature-canvas-observe', 'btn-clear-sig-observe', existingObserve);
     },
@@ -6036,6 +6837,15 @@ const VmcFormPage = {
             } else if (!isEdit) {
                 // Nouvelle VMC creee hors planning : chercher une visite planifiee correspondante
                 await this._linkToPlanning(data, vmcId);
+            }
+
+            // En edition : purger les actions existantes liees a cette VMC
+            // pour eviter la duplication a chaque enregistrement
+            if (isEdit && vmcId != null) {
+                const anciennes = await db.actions.where('vmcId').equals(vmcId).toArray();
+                for (const a of anciennes) {
+                    if (a.id != null) await DB.deleteAction(a.id);
+                }
             }
 
             // Creer les actions dans le plan d'actions
@@ -6249,6 +7059,12 @@ const VmcFormPage = {
    vmc-list.js – Liste des VMC (modele Observateurs)
    ============================================================= */
 const VmcListPage = {
+    _escHtml(str) {
+        return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    },
+    _escAttr(s) {
+        return (s || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    },
     _isMobile: !window.showOpenFilePicker && !!navigator.share,
 
     async render(container) {
@@ -6274,21 +7090,21 @@ const VmcListPage = {
                         <label class="form-label small mb-0">Observateur</label>
                         <select class="form-select form-select-sm" id="fl-cond">
                             <option value="">Tous</option>
-                            ${conducteurs.map(c => `<option value="${c.id}">${c.nom}</option>`).join('')}
+                            ${conducteurs.map(c => `<option value="${c.id}">${this._escHtml(c.nom)}</option>`).join('')}
                         </select>
                     </div>
                     <div class="col-auto">
                         <label class="form-label small mb-0">Agence</label>
                         <select class="form-select form-select-sm" id="fl-agence">
                             <option value="">Toutes</option>
-                            ${agences.map(a => `<option value="${a}">${a}</option>`).join('')}
+                            ${agences.map(a => `<option value="${this._escAttr(a)}">${this._escHtml(a)}</option>`).join('')}
                         </select>
                     </div>
                     <div class="col-auto">
                         <label class="form-label small mb-0">Type</label>
                         <select class="form-select form-select-sm" id="fl-type">
                             <option value="">Tous</option>
-                            ${grilleTypes.map(gt => `<option value="${gt.id}">${gt.label}</option>`).join('')}
+                            ${grilleTypes.map(gt => `<option value="${gt.id}">${this._escHtml(gt.label)}</option>`).join('')}
                         </select>
                     </div>
                 </div>
@@ -6353,11 +7169,11 @@ const VmcListPage = {
                 ? `<div class="progress" style="height:16px;min-width:60px"><div class="progress-bar ${pct >= 80 ? 'bg-success' : pct >= 50 ? 'bg-warning' : 'bg-danger'}" style="width:${pct}%">${pct}%</div></div>`
                 : `<span class="text-muted small">${v.scoreOk} OK</span>`;
             return `<tr>
-                <td class="fw-bold">${v.conducteurNom || cond?.nom || '?'}</td>
-                <td>${cond?.agence || ''}</td>
-                <td><span class="badge bg-secondary">${v.type || '-'}</span></td>
+                <td class="fw-bold">${this._escHtml(v.conducteurNom || cond?.nom || '?')}</td>
+                <td>${this._escHtml(cond?.agence || '')}</td>
+                <td><span class="badge bg-secondary">${this._escHtml(v.type || '-')}</span></td>
                 <td>${this._fmtDate(v.date)}</td>
-                <td>${v.site || '-'}</td>
+                <td>${this._escHtml(v.site || '-')}</td>
                 <td>${scoreHtml}</td>
                 <td>
                     <div class="d-flex gap-1 flex-wrap">
@@ -6462,6 +7278,12 @@ const VmcListPage = {
    actions.js – Suivi des actions correctives (modele VMC)
    ============================================================= */
 const ActionsPage = {
+    _escHtml(str) {
+        return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    },
+    _escAttr(s) {
+        return (s || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    },
     async render(container) {
         const vmcs = await DB.getVmcs();
         const vmcMap = Object.fromEntries(vmcs.map(v => [v.id, v]));
@@ -6493,14 +7315,14 @@ const ActionsPage = {
                         <label class="form-label small mb-0">VMC</label>
                         <select class="form-select form-select-sm" id="fa-vmc">
                             <option value="">Toutes</option>
-                            ${vmcs.map(v => `<option value="${v.id}">${v.conducteurNom} - ${this._fmtDate(v.date)}</option>`).join('')}
+                            ${vmcs.map(v => `<option value="${v.id}">${this._escHtml(v.conducteurNom)} - ${this._fmtDate(v.date)}</option>`).join('')}
                         </select>
                     </div>
                     <div class="col-auto">
                         <label class="form-label small mb-0">Responsable</label>
                         <select class="form-select form-select-sm" id="fa-responsable">
                             <option value="">Tous</option>
-                            ${responsables.map(r => `<option value="${r}">${r}</option>`).join('')}
+                            ${responsables.map(r => `<option value="${this._escAttr(r)}">${this._escHtml(r)}</option>`).join('')}
                         </select>
                     </div>
                 </div>
@@ -6587,9 +7409,9 @@ const ActionsPage = {
 
             const overdue = a.delai && a.delai < today && a.statut !== 'Soldee';
             return `<tr class="${overdue ? 'table-danger' : ''}">
-                <td>${vmc ? `<a href="#vmc-edit/${vmc.id}" class="text-decoration-none fw-bold" title="Voir la VMC du ${vmc.date ? this._fmtDate(vmc.date) : ''}">${vmc.conducteurNom}</a>` : '-'}</td>
-                <td class="text-truncate" style="max-width:250px">${a.description || ''}</td>
-                <td>${a.responsable || '-'}</td>
+                <td>${vmc ? `<a href="#vmc-edit/${vmc.id}" class="text-decoration-none fw-bold" title="Voir la VMC du ${vmc.date ? this._fmtDate(vmc.date) : ''}">${this._escHtml(vmc.conducteurNom)}</a>` : '-'}</td>
+                <td class="text-truncate" style="max-width:250px">${this._escHtml(a.description || '')}</td>
+                <td>${this._escHtml(a.responsable || '-')}</td>
                 <td>${a.delai ? this._fmtDate(a.delai) : '-'} ${overdue ? '<span class="text-danger">\u26A0\uFE0F</span>' : ''}</td>
                 <td class="text-center">${ageHtml}</td>
                 <td class="text-center">${retardHtml}</td>
@@ -6693,17 +7515,17 @@ const ActionsPage = {
                     <label class="form-label">VMC associee</label>
                     <select class="form-select" id="act-vmc">
                         <option value="">-- Aucune --</option>
-                        ${this._vmcs.map(v => `<option value="${v.id}" ${action?.vmcId === v.id ? 'selected' : ''}>${v.conducteurNom} - ${this._fmtDate(v.date)} (${v.type})</option>`).join('')}
+                        ${this._vmcs.map(v => `<option value="${v.id}" ${action?.vmcId === v.id ? 'selected' : ''}>${this._escHtml(v.conducteurNom)} - ${this._fmtDate(v.date)} (${this._escHtml(v.type)})</option>`).join('')}
                     </select>
                 </div>
                 <div class="mb-2">
                     <label class="form-label">Description *</label>
-                    <textarea class="form-control" id="act-desc" rows="2" required>${action?.description || ''}</textarea>
+                    <textarea class="form-control" id="act-desc" rows="2" required>${this._escHtml(action?.description || '')}</textarea>
                 </div>
                 <div class="row g-2 mb-2">
                     <div class="col">
                         <label class="form-label">Responsable</label>
-                        <input type="text" class="form-control" id="act-resp" value="${action?.responsable || ''}">
+                        <input type="text" class="form-control" id="act-resp" value="${this._escAttr(action?.responsable || '')}">
                     </div>
                     <div class="col">
                         <label class="form-label">Délai</label>
@@ -6733,6 +7555,9 @@ const ActionsPage = {
         </div></div></div>`);
 
         const modal = new bootstrap.Modal(document.getElementById(id));
+        const modalEl = document.getElementById(id);
+        modalEl.addEventListener('shown.bs.modal', () => DataSync._beginEditing());
+        modalEl.addEventListener('hidden.bs.modal', () => DataSync._endEditing());
         modal.show();
 
         document.getElementById('form-action').onsubmit = async e => {
@@ -7241,6 +8066,15 @@ const ImportExport = {
             const photoW = 55;
             const photoH = 40;
 
+            // #15 — Pour les photos externalisees (path sans data), recuperer le
+            // base64 depuis SharePoint avant de l'inserer dans le PDF (lazy/cache).
+            for (const photo of vmc.photos) {
+                if (photo && !photo.data && photo.path) {
+                    try { photo.data = await _downloadFileAsDataURL(photo.path); }
+                    catch (e) { console.warn('PDF: photo non telechargee', photo.path, e); }
+                }
+            }
+
             // Titre
             if (y + photoH + 10 > pageH - 20) { doc.addPage(); y = 20; }
             doc.setFontSize(9);
@@ -7302,7 +8136,15 @@ const ImportExport = {
             doc.setTextColor(0);
         }
 
-        const fileName = `VMC_${(vmc.conducteurNom || 'rapport').replace(/\s+/g, '_')}_${vmc.date || 'draft'}.pdf`;
+        // #20 — assainir le nom (whitelist) : conducteurNom est un champ libre,
+        // on bloque ../, separateurs et caracteres speciaux avant l'URL Graph.
+        const safeNom = String(vmc.conducteurNom || 'rapport')
+            .replace(/[\/\\]/g, '_')       // separateurs de chemin
+            .replace(/\.\./g, '_')         // remontees de repertoire
+            .replace(/\s+/g, '_')
+            .replace(/[^A-Za-z0-9 _.-]/g, '') || 'rapport';
+        const safeDate = String(vmc.date || 'draft').replace(/[^A-Za-z0-9_.-]/g, '') || 'draft';
+        const fileName = `VMC_${safeNom}_${safeDate}.pdf`;
         return { doc, fileName };
     },
 
@@ -7461,21 +8303,21 @@ const RemarquesPage = {
                         <label class="form-label small mb-0">Observateur</label>
                         <select class="form-select form-select-sm" id="rq-cond">
                             <option value="">Tous</option>
-                            ${conducteurs.map(c => `<option value="${c.id}">${c.nom}</option>`).join('')}
+                            ${conducteurs.map(c => `<option value="${c.id}">${this._escHtml(c.nom)}</option>`).join('')}
                         </select>
                     </div>
                     <div class="col-auto">
                         <label class="form-label small mb-0">Agence</label>
                         <select class="form-select form-select-sm" id="rq-agence">
                             <option value="">Toutes</option>
-                            ${agences.map(a => `<option value="${a}">${a}</option>`).join('')}
+                            ${agences.map(a => `<option value="${this._escAttr(a)}">${this._escHtml(a)}</option>`).join('')}
                         </select>
                     </div>
                     <div class="col-auto">
                         <label class="form-label small mb-0">Type</label>
                         <select class="form-select form-select-sm" id="rq-type">
                             <option value="">Tous</option>
-                            ${grilleTypes.map(gt => `<option value="${gt.id}">${gt.label}</option>`).join('')}
+                            ${grilleTypes.map(gt => `<option value="${gt.id}">${this._escHtml(gt.label)}</option>`).join('')}
                         </select>
                     </div>
                     <div class="col-auto">
@@ -7576,10 +8418,10 @@ const RemarquesPage = {
             const bp = v.bonnesPratiques || '';
             return `<tr>
                 <td>${this._fmtDate(v.date)}</td>
-                <td class="fw-bold">${v.conducteurNom || cond?.nom || '?'}</td>
-                <td>${v.observeNom || '-'}</td>
-                <td>${v.site || '-'}</td>
-                <td><span class="badge bg-secondary">${v.type || '-'}</span></td>
+                <td class="fw-bold">${this._escHtml(v.conducteurNom || cond?.nom || '?')}</td>
+                <td>${this._escHtml(v.observeNom || '-')}</td>
+                <td>${this._escHtml(v.site || '-')}</td>
+                <td><span class="badge bg-secondary">${this._escHtml(v.type || '-')}</span></td>
                 <td>${scoreHtml}</td>
                 <td style="white-space:pre-line;max-width:250px">${this._escHtml(ptAmel)}</td>
                 <td style="white-space:pre-line;max-width:250px">${this._escHtml(bp)}</td>
@@ -7626,7 +8468,11 @@ const RemarquesPage = {
 
     _escHtml(str) {
         if (!str) return '';
-        return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    },
+
+    _escAttr(s) {
+        return (s || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
 };
 
@@ -7694,6 +8540,13 @@ const App = {
         const parts  = hash.split('/');
         const page   = parts[0];
         const params = parts.slice(1);
+
+        // Garde d'acces admin (synchrone) : la page Parametres est reservee aux admins.
+        if (page === 'config' && typeof DataSync !== 'undefined' && DataSync._isAdminCached === false) {
+            showToast('Accès réservé aux administrateurs', 'warning');
+            location.hash = '#dashboard';
+            return;
+        }
 
         // Si on quitte un formulaire VMC et qu'il y a des donnees distantes
         // en attente (reçues pendant la saisie), les appliquer maintenant.
@@ -7780,9 +8633,16 @@ const App = {
 
         document.getElementById('btn-save-data').onclick = () => DataSync.save();
 
+        // Appliquer le controle d'acces admin au boot (avant autoConnect : la DB locale
+        // peut deja contenir _admins charge depuis les donnees embarquees/locales)
+        await DataSync.applyAdminUI();
+
         // Tenter la reconnexion automatique
         const state = await DataSync.autoConnect();
         DataSync.updateConnectButton(state);
+
+        // Recalculer apres autoConnect : _admins a pu etre rafraichi depuis le remote
+        await DataSync.applyAdminUI();
 
         // Si connecte et donnees rechargees, rafraichir la page
         if (state === 'connected') {
@@ -7817,15 +8677,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Pas de donnees embarquees : utiliser le seed
                 await ensureSeed();
             }
-            // Toujours vérifier les conducteurs manquants (nouveaux ajouts au SEED)
-            for (const c of SEED_CONDUCTEURS) {
-                const existing = await db.conducteurs.get(c.id);
-                if (!existing) {
-                    await db.conducteurs.put(c);
-                    console.log('VMCManager: conducteur ajoute -', c.nom);
-                }
-            }
-            // Toujours injecter les grilles manquantes (meme si donnees deja chargees)
+            // BUG #16 — NE PLUS re-injecter les conducteurs SEED a chaque boot :
+            // cela reintroduisait, avant le chargement distant, un conducteur supprime
+            // cote SharePoint. Le seed des conducteurs ne se fait qu'a la 1re installation
+            // (base vide), gere par ensureSeed(). On conserve uniquement la verification
+            // des grilles (donnees de reference applicatives, pas des donnees utilisateur).
             await _ensureGrilleTypes();
         })
         .then(async () => {
