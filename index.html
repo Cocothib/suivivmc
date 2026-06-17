@@ -6258,16 +6258,21 @@ const VmcFormPage = {
             <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center">
                 <span>📷 Photos terrain <span class="badge bg-secondary" id="photo-count">0</span></span>
                 <div class="d-flex gap-1">
-                    <button type="button" class="btn btn-sm btn-outline-primary mb-0" id="btn-photo-capture" style="touch-action:manipulation;min-height:44px;min-width:44px;display:inline-flex;align-items:center;justify-content:center">
-                        📷 Photo
-                    </button>
+                    <!-- Samsung Internet exige une activation utilisateur DIRECTE sur l'input capture=environment :
+                         l'input transparent est superpose au bouton, le tap atteint l'input natif (pas de click() programmatique). -->
+                    <span class="position-relative d-inline-flex" style="overflow:hidden;border-radius:.25rem">
+                        <button type="button" tabindex="-1" class="btn btn-sm btn-outline-primary mb-0" id="btn-photo-capture" style="touch-action:manipulation;min-height:44px;min-width:44px;display:inline-flex;align-items:center;justify-content:center">
+                            📷 Photo
+                        </button>
+                        <input type="file" accept="image/*" capture="environment" id="photo-capture" aria-label="Prendre une photo" style="position:absolute;inset:0;width:100%;height:100%;opacity:0;font-size:0;cursor:pointer">
+                    </span>
                     <button type="button" class="btn btn-sm btn-outline-secondary mb-0" id="btn-photo-gallery" style="touch-action:manipulation;min-height:44px;min-width:44px;display:inline-flex;align-items:center;justify-content:center">
                         🖼️ Galerie
                     </button>
                 </div>
             </div>
             <div class="card-body">
-                <input type="file" accept="image/*" capture="environment" id="photo-capture" aria-hidden="true" tabindex="-1" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
+                <!-- input photo-capture deplace en overlay sur le bouton 📷 (cf. en-tete de la carte) -->
                 <input type="file" accept="image/*" multiple id="photo-gallery" aria-hidden="true" tabindex="-1" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
                 <div id="photo-grid" class="d-flex flex-wrap gap-2"></div>
                 <div id="photo-empty" class="text-center text-muted small py-3">
