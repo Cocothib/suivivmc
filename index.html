@@ -3661,6 +3661,7 @@ const DataSync = {
                 this._pendingRemoteData = null;
                 this._pendingNotified = false;
                 if (typeof ActivityLog !== 'undefined') ActivityLog.log('sauvegarde', { version: data._meta.version, merged: remoteVersion > lastSyncedVersion });
+                showToast('Enregistré sur SharePoint', 'info');
                 console.log(`DataSync: sauvegarde SharePoint OK (v${data._meta.version}, tentative ${attempt})`);
                 break;
             }
