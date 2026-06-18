@@ -3556,7 +3556,7 @@ const DataSync = {
         };
     },
 
-    async save() {
+    async save(opts = {}) {
         if (this._saving) return;
         if (!this._connected) {
             console.warn('DataSync: pas connecte, sauvegarde locale uniquement');
@@ -3661,7 +3661,7 @@ const DataSync = {
                 this._pendingRemoteData = null;
                 this._pendingNotified = false;
                 if (typeof ActivityLog !== 'undefined') ActivityLog.log('sauvegarde', { version: data._meta.version, merged: remoteVersion > lastSyncedVersion });
-                showToast('Enregistré sur SharePoint', 'info');
+                if (opts.manual) showToast('Enregistré sur SharePoint', 'info');  // notif uniquement sur sauvegarde manuelle (pas a chaque auto-save 1.5s)
                 console.log(`DataSync: sauvegarde SharePoint OK (v${data._meta.version}, tentative ${attempt})`);
                 break;
             }
@@ -8664,7 +8664,7 @@ const App = {
             navContainer.appendChild(syncDiv);
         }
 
-        document.getElementById('btn-save-data').onclick = () => DataSync.save();
+        document.getElementById('btn-save-data').onclick = () => DataSync.save({ manual: true });
 
         // Appliquer le controle d'acces admin au boot (avant autoConnect : la DB locale
         // peut deja contenir _admins charge depuis les donnees embarquees/locales)
