@@ -5215,6 +5215,17 @@ const DashboardPage = {
         const nbRetard = visites.filter(v => v.statut === 'planifie' && !v.annulee && v.datePrevue < today).length;
         const actionsOuvertes = actions.filter(a => a.statut === 'A faire' || a.statut === 'En cours').length;
 
+        // --- Suivi des actions correctives ---
+        const actAFaire    = actions.filter(a => a.statut === 'A faire').length;
+        const actEnCours   = actions.filter(a => a.statut === 'En cours').length;
+        const actSoldees   = actions.filter(a => a.statut === 'Soldee').length;
+        const actTotal     = actions.length;
+        const actEnRetard  = actions.filter(a => a.statut !== 'Soldee' && a.delai && a.delai < today).length;
+        const tauxCloture  = actTotal > 0 ? Math.round((actSoldees / actTotal) * 100) : 0;
+        const pctAFaire    = actTotal > 0 ? (actAFaire  / actTotal) * 100 : 0;
+        const pctEnCours   = actTotal > 0 ? (actEnCours / actTotal) * 100 : 0;
+        const pctSoldees   = actTotal > 0 ? (actSoldees / actTotal) * 100 : 0;
+
         const totalPrevues = visites.filter(v => !v.annulee).length;
         const tauxConf = totalPrevues > 0 ? Math.round((nbRealisees / totalPrevues) * 100) : 0;
 
@@ -5285,6 +5296,35 @@ const DashboardPage = {
             </div>
         </div>
 
+        <!-- Suivi des actions correctives -->
+        <div class="row g-3 mb-4">
+            <div class="col-12">
+                <div class="card kpi-card" id="card-suivi-actions" role="button" style="cursor:pointer">
+                    <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center">
+                        <span>\u{1F527}Suivi des actions correctives</span>
+                        ${actEnRetard > 0 ? `<span class="badge bg-danger">⏰ ${actEnRetard} en retard</span>` : `<span class="badge bg-success">✅ 0 en retard</span>`}
+                    </div>
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between mb-1">
+                            <span>Taux de clôture</span>
+                            <span class="fw-bold">${tauxCloture}% <small class="text-muted fw-normal">(${actSoldees}/${actTotal})</small></span>
+                        </div>
+                        <div class="progress" style="height:24px">
+                            <div class="progress-bar bg-success" style="width:${pctSoldees}%" title="Soldées : ${actSoldees}">${pctSoldees >= 10 ? actSoldees : ''}</div>
+                            <div class="progress-bar bg-warning text-dark" style="width:${pctEnCours}%" title="En cours : ${actEnCours}">${pctEnCours >= 10 ? actEnCours : ''}</div>
+                            <div class="progress-bar bg-danger" style="width:${pctAFaire}%" title="À faire : ${actAFaire}">${pctAFaire >= 10 ? actAFaire : ''}</div>
+                        </div>
+                        <div class="d-flex flex-wrap gap-3 small text-muted mt-2">
+                            <span><span class="badge bg-success">&nbsp;</span> Soldées : <strong>${actSoldees}</strong></span>
+                            <span><span class="badge bg-warning">&nbsp;</span> En cours : <strong>${actEnCours}</strong></span>
+                            <span><span class="badge bg-danger">&nbsp;</span> À faire : <strong>${actAFaire}</strong></span>
+                            <span class="ms-auto">Total : <strong>${actTotal}</strong></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Prochaines visites & Actions recentes -->
         <div class="row g-3">
             <div class="col-md-6">
@@ -5322,6 +5362,8 @@ const DashboardPage = {
         document.getElementById('kpi-réalisées').onclick   = () => { location.hash = '#planning'; };
         document.getElementById('kpi-retard').onclick      = () => { location.hash = '#planning'; };
         document.getElementById('kpi-actions').onclick     = () => { location.hash = '#actions'; };
+        const cardSuivi = document.getElementById('card-suivi-actions');
+        if (cardSuivi) cardSuivi.onclick = () => { location.hash = '#actions'; };
     },
 
     _renderChart(visites, vmcsAnnee, annee) {
