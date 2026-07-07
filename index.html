@@ -2858,6 +2858,168 @@ async function _deleteFile(filePath) {
     await _graphFetch(url, { method: 'DELETE' });
 }
 
+/* =====================================================================
+ * SharedRef — Referentiel partage inter-apps QSE (fichier neutre)
+ * ---------------------------------------------------------------------
+ * Fichier physique : site /sites/QHSE -> Shared/referentiels.json
+ *   (a la racine de la bibliotheque de documents, a cote de SuiviPDP/)
+ * Contrat commun aux 5 apps : SuiviPDP / SuiviVMC / SuiviNC /
+ *   SuiviDUERP / SuiviDechets.
+ * Spec : Documents/INTEGRATION-referentiel-partage.md
+ *
+ * PRINCIPE
+ *   Sections partitionnees par OWNER. Une app n'appelle publish() QUE sur
+ *   ses propres sections ; partout ailleurs elle lit (read / get). Un seul
+ *   owner par section => pas de merge de contenu, le verrou ETag suffit.
+ *
+ * INTEGRATION
+ *   Ce bloc est IDENTIQUE dans les 5 apps. Seul l'appel SharedRef.configure(...)
+ *   en fin de bloc est branche sur les primitives locales de chaque app.
+ *   Le module est DORMANT : configure() ne fait aucune I/O. Rien n'est lu ni
+ *   ecrit tant que read()/publish() ne sont pas appeles explicitement.
+ * ===================================================================== */
+const SharedRef = (() => {
+  const PATH = 'Shared/referentiels.json';
+  const SCHEMA_VERSION = 1;
+  const CACHE_KEY = 'cache';                 // prefixe localStorage : 'sharedref:cache'
+  const REFRESH_MS = 60 * 60 * 1000;         // relecture au plus une fois / heure
+  const SECTIONS = ['entreprises', 'chantiers', 'personnel', 'agences', 'exutoires'];
+
+  // Primitives injectees par configure() (specifiques a chaque app)
+  let io = {
+    readFile:  null,   // async () => ({ data, etag })   (data:null si 404)
+    writeFile: null,   // async (data, etag) => driveItem (throw err._precondition sur 412)
+    cacheGet:  (k) => { try { return JSON.parse(localStorage.getItem('sharedref:' + k) || 'null'); } catch (_) { return null; } },
+    cacheSet:  (k, v) => { try { localStorage.setItem('sharedref:' + k, JSON.stringify(v)); } catch (_) {} },
+    userName:  () => 'Inconnu',
+  };
+
+  let _mem = null;   // { data, etag, fetchedAt } — miroir memoire du cache
+
+  // ---- normalisation : cles de jointure canoniques ----
+  const slug = (s) => String(s || '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')   // retire les accents
+    .toLowerCase().trim()
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const normSiret = (s) => String(s || '').replace(/\D/g, '');
+  const keyPersonnel = (nom, prenom) => slug(nom) + '-' + slug(prenom);
+  const idEntreprise = (siret, nom) => 'ent-' + (normSiret(siret) || slug(nom));
+  const idExutoire   = (siret, nom) => 'exu-' + (normSiret(siret) || slug(nom));
+  const idChantier   = (nom, entite, oppId) => oppId ? ('cht-opp-' + slug(oppId)) : ('cht-' + slug(nom) + '-' + slug(entite));
+  const idPersonnel  = (nom, prenom) => 'per-' + keyPersonnel(nom, prenom);
+  const idAgence     = (marque, ville) => 'agc-' + slug(marque) + '-' + slug(ville);
+
+  const _nowISO = () => { try { return new Date().toISOString(); } catch (_) { return ''; } };
+
+  function emptyDoc() {
+    const now = _nowISO();
+    const doc = { _meta: { schemaVersion: SCHEMA_VERSION, lastSaved: now, savedBy: io.userName() } };
+    for (const s of SECTIONS) doc[s] = { _owner: null, _version: 0, _updatedAt: now, items: [] };
+    return doc;
+  }
+
+  function configure(adapter) { io = Object.assign(io, adapter || {}); return SharedRef; }
+
+  async function _loadCache() {
+    if (_mem) return _mem;
+    try { const c = await io.cacheGet(CACHE_KEY); if (c && c.data) _mem = c; } catch (_) {}
+    return _mem;
+  }
+
+  // Lit le referentiel complet. Sert le cache local si frais (<REFRESH_MS) sauf
+  // force=true. Best-effort : sur echec reseau, renvoie le dernier cache connu
+  // (ou un doc vide) sans throw.
+  async function read({ force = false } = {}) {
+    await _loadCache();
+    const fresh = _mem && (Date.now() - (_mem.fetchedAt || 0) < REFRESH_MS);
+    if (fresh && !force) return _mem.data;
+    if (!io.readFile) return (_mem && _mem.data) || emptyDoc();
+    try {
+      const res = await io.readFile();
+      const data = (res && res.data) ? res.data : emptyDoc();
+      _mem = { data, etag: (res && res.etag) || null, fetchedAt: Date.now() };
+      try { await io.cacheSet(CACHE_KEY, _mem); } catch (_) {}
+      return data;
+    } catch (e) {
+      console.warn('[SharedRef] lecture echouee, cache conserve :', e && e.message);
+      return (_mem && _mem.data) || emptyDoc();
+    }
+  }
+
+  // Items d'une section depuis le cache memoire (instantane, sans I/O).
+  // Appeler read() au moins une fois avant pour peupler le cache.
+  function get(section) {
+    const sec = _mem && _mem.data && _mem.data[section];
+    return (sec && Array.isArray(sec.items)) ? sec.items : [];
+  }
+
+  function meta(section) {
+    const sec = _mem && _mem.data && _mem.data[section];
+    return sec ? { owner: sec._owner, version: sec._version, updatedAt: sec._updatedAt } : null;
+  }
+
+  // Publication OWNER : remplace UNE section sans toucher aux autres.
+  // read(ETag) -> remplace section -> write(If-Match) -> retry sur 412.
+  async function publish(section, items, { owner, maxRetries = 3 } = {}) {
+    if (!SECTIONS.includes(section)) throw new Error('[SharedRef] section inconnue: ' + section);
+    if (!io.readFile || !io.writeFile) throw new Error('[SharedRef] I/O non configuree');
+    const ownerId = owner || io.userName();
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const res = await io.readFile();
+      const doc = (res && res.data) ? res.data : emptyDoc();
+      if (!doc._meta) doc._meta = { schemaVersion: SCHEMA_VERSION };
+      const prev = doc[section] || { _version: 0 };
+      doc[section] = {
+        _owner: ownerId,
+        _version: (prev._version || 0) + 1,
+        _updatedAt: _nowISO(),
+        items: Array.isArray(items) ? items : [],
+      };
+      doc._meta.lastSaved = _nowISO();
+      doc._meta.savedBy = io.userName();
+      doc._meta.schemaVersion = SCHEMA_VERSION;
+      try {
+        await io.writeFile(doc, (res && res.etag) || null);
+        _mem = { data: doc, etag: null, fetchedAt: Date.now() };  // etag re-obtenu au prochain read()
+        try { await io.cacheSet(CACHE_KEY, _mem); } catch (_) {}
+        return doc[section];
+      } catch (e) {
+        if (e && e._precondition && attempt < maxRetries) continue;  // 412 : relire + reessayer
+        throw e;
+      }
+    }
+    throw new Error('[SharedRef] publication abandonnee apres conflits repetes (' + section + ')');
+  }
+
+  return {
+    PATH, SECTIONS, configure, read, get, meta, publish,
+    slug, normSiret, keyPersonnel,
+    idEntreprise, idExutoire, idChantier, idPersonnel, idAgence,
+  };
+})();
+
+/* Branchement SuiviVMC — referentiel partage (Lot 0, dormant).
+ * Ecarts vs SuiviPDP normalises ici :
+ *   - _readJsonFileWithETag renvoie { data, eTag } (T majuscule) -> remappe en { data, etag }.
+ *   - _writeJsonFile(path, data, { ifMatch }) et signale le 412 via isPreconditionFailed
+ *     -> rethrow avec err._precondition = true pour le retry du module. */
+SharedRef.configure({
+  readFile: async () => {
+    const r = await _readJsonFileWithETag(SharedRef.PATH);   // { data, eTag } (data:null si 404)
+    return { data: (r && r.data) || null, etag: (r && r.eTag) || null };
+  },
+  writeFile: async (data, etag) => {
+    try {
+      return await _writeJsonFile(SharedRef.PATH, data, etag ? { ifMatch: etag } : {});
+    } catch (e) {
+      if (e && (e.isPreconditionFailed || e.status === 412)) e._precondition = true;
+      throw e;
+    }
+  },
+  userName: () => localStorage.getItem('vmc_user_name') || 'Inconnu',
+});
+try { window.SharedRef = SharedRef; } catch (_) {}
+
 async function _listFiles(folderPath) {
     const driveId = await _getDriveId();
     const url = `https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${folderPath}:/children`;
