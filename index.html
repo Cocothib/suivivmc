@@ -1134,6 +1134,9 @@ body {
         </div>
     </nav>
 
+    <!-- Bandeau de présence : autres utilisateurs connectés (« Également connecté(s) ») -->
+    <div id="presence-bar"></div>
+
     <!-- Main content area -->
     <main id="app-content" class="container-fluid py-3">
         <div id="loading-screen" class="text-center py-5">
@@ -4068,6 +4071,18 @@ const DataSync = {
         if (!this._presenceTimer) {
             this._presenceTimer = setInterval(() => this.registerPresence(), VMC_CONFIG.PRESENCE_INTERVAL_MS);
         }
+
+        // Rafraichir le bandeau des autres connectes a chaque battement (arrivees/departs).
+        this.refreshPresenceBanner();
+    },
+
+    // Lit les utilisateurs actifs et met a jour le bandeau « Egalement connecté(s) ».
+    async refreshPresenceBanner() {
+        if (!this._connected) { this._updatePresenceBanner([]); return; }
+        try {
+            const others = await this.getActiveUsers();
+            this._updatePresenceBanner(others);
+        } catch { /* silencieux */ }
     },
 
     _presenceSafeName() {
@@ -9031,9 +9046,9 @@ const App = {
         // Si connecte et donnees rechargees, rafraichir la page
         if (state === 'connected') {
             App.route();
-            // Afficher le bandeau de presence des autres utilisateurs
-            const others = await DataSync.getActiveUsers();
-            DataSync._updatePresenceBanner(others);
+            // Afficher le bandeau de presence des autres utilisateurs (rafraichi ensuite
+            // a chaque battement de registerPresence -> arrivees/departs visibles).
+            DataSync.refreshPresenceBanner();
         }
 
         // Bandeau d'autorisation si permission necessaire
