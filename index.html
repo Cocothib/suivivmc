@@ -964,6 +964,37 @@ body {
     display: block;
     touch-action: none;
 }
+/* Boutons injectés dans chaque zone de signature (Valider = verrouiller,
+   Agrandir = plein écran) — portés depuis SuiviPDP. */
+.sig-btns {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    z-index: 4;
+    display: flex;
+    gap: 4px;
+}
+.sig-enlarge-btn, .sig-valider-btn {
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+.sig-enlarge-btn { background: rgba(13, 110, 253, 0.9); }
+.sig-enlarge-btn:active { background: #0a58ca; }
+.sig-valider-btn { background: rgba(25, 135, 84, 0.95); font-size: 17px; }
+.sig-valider-btn:active { background: #146c43; }
+/* Signature validée : verrouillée (non modifiable tant qu'on n'a pas Effacé). */
+.signature-pad-wrapper.sig-locked { background: #f4fbf7; border-color: #198754; }
 
 /* ---- Grille Editor ---- */
 .grille-section .table td { vertical-align: middle; }
@@ -6953,11 +6984,58 @@ const VmcFormPage = {
             velocityFilterWeight: 0.7
         });
 
+        pad._ratio = ratio;
+
+        // --- Porté de SuiviPDP : verrouillage + bouton Valider + plein écran ---
+        // Une signature validée/chargée n'est plus modifiable (anti-trace accidentel :
+        // un doigt qui passe dessus). off()=verrou, on()=édition. Effacer déverrouille.
+        let validerBtn = wrapper.querySelector('.sig-valider-btn');
+        const refreshValider = () => { if (validerBtn) validerBtn.style.display = (!pad.isEmpty() && !pad._locked) ? 'flex' : 'none'; };
+        const setLocked = (locked) => {
+            pad._locked = !!locked;
+            if (locked) pad.off(); else pad.on();
+            wrapper.classList.toggle('sig-locked', !!locked);
+            refreshValider();
+        };
+        pad._setLocked = setLocked;
+
         if (existingData) {
             pad.fromDataURL(existingData, { ratio });
         }
 
-        document.getElementById(btnId).onclick = () => pad.clear();
+        // Bouton Effacer (en-tête de carte) : vide ET déverrouille.
+        const clearBtn = document.getElementById(btnId);
+        if (clearBtn) clearBtn.onclick = () => { pad.clear(); setLocked(false); };
+
+        // Barre Valider + Agrandir injectée une seule fois par zone.
+        if (!wrapper.querySelector('.sig-btns')) {
+            wrapper.style.position = 'relative';
+            const bar = document.createElement('div');
+            bar.className = 'sig-btns';
+            validerBtn = document.createElement('button');
+            validerBtn.type = 'button';
+            validerBtn.className = 'sig-valider-btn';
+            validerBtn.title = 'Valider la signature (verrouiller)';
+            validerBtn.setAttribute('aria-label', 'Valider et verrouiller la signature');
+            validerBtn.innerHTML = '<i class="bi bi-check-lg"></i>';
+            validerBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); if (!pad.isEmpty()) setLocked(true); });
+            const enlarge = document.createElement('button');
+            enlarge.type = 'button';
+            enlarge.className = 'sig-enlarge-btn';
+            enlarge.title = 'Signer en grand';
+            enlarge.setAttribute('aria-label', 'Agrandir la zone de signature');
+            enlarge.innerHTML = '<i class="bi bi-arrows-fullscreen"></i>';
+            enlarge.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); this._openSignatureFullscreen(pad); });
+            bar.appendChild(validerBtn);
+            bar.appendChild(enlarge);
+            wrapper.appendChild(bar);
+        }
+
+        // Affiche « Valider » dès la fin d'un tracé.
+        pad.addEventListener('endStroke', refreshValider);
+
+        // Signature préexistante -> déjà validée, on la verrouille d'office.
+        if (existingData) setLocked(true); else refreshValider();
 
         // #11 — Fuite de listeners resize : on rattache le listener a un AbortController
         // partage par le formulaire, abort() au teardown → plus d'accumulation.
@@ -6975,6 +7053,75 @@ const VmcFormPage = {
         }, { signal: this._sigResizeAbort.signal });
 
         return pad;
+    },
+
+    // Mode « Signer en grand » plein écran lié à un pad d'origine (signature_pad).
+    // À la validation, le tracé est reporté dans le petit pad puis verrouillé.
+    _openSignatureFullscreen(originPad) {
+        if (!originPad) return;
+        this._sigFsPad = originPad;
+        let modal = document.getElementById('sig-fs-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'sig-fs-modal';
+            modal.className = 'modal fade';
+            modal.tabIndex = -1;
+            modal.innerHTML = `
+                <div class="modal-dialog modal-fullscreen">
+                  <div class="modal-content">
+                    <div class="modal-header py-2 align-items-center">
+                      <h6 class="modal-title mb-0"><i class="bi bi-pen me-1"></i>Signez dans le cadre</h6>
+                      <div class="ms-auto d-flex gap-2">
+                        <button type="button" class="btn btn-outline-secondary btn-sm" id="sig-fs-clear"><i class="bi bi-eraser me-1"></i>Effacer</button>
+                        <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Annuler</button>
+                        <button type="button" class="btn btn-primary btn-sm fw-bold" id="sig-fs-valider"><i class="bi bi-check-lg me-1"></i>Valider</button>
+                      </div>
+                    </div>
+                    <div class="modal-body p-2" id="sig-fs-body">
+                      <canvas id="sig-fs-canvas" style="touch-action:none;border:2px dashed #adb5bd;border-radius:8px;background:#fff"></canvas>
+                    </div>
+                  </div>
+                </div>`;
+            document.body.appendChild(modal);
+            modal.querySelector('#sig-fs-clear').addEventListener('click', () => { if (this._sigFsBigPad) this._sigFsBigPad.clear(); });
+            modal.querySelector('#sig-fs-valider').addEventListener('click', () => this._applySignatureFullscreen());
+        }
+        const inst = bootstrap.Modal.getOrCreateInstance(modal);
+        modal.addEventListener('shown.bs.modal', () => {
+            const body = document.getElementById('sig-fs-body');
+            const old = document.getElementById('sig-fs-canvas');
+            if (!old || !body) return;
+            // Canvas neuf à chaque ouverture -> drop des écouteurs du SignaturePad précédent.
+            const canvas = old.cloneNode(false);
+            old.parentNode.replaceChild(canvas, old);
+            const ratio = Math.max(window.devicePixelRatio || 1, 2);
+            const cssW = (body.clientWidth || window.innerWidth) - 8;
+            const cssH = (body.clientHeight || (window.innerHeight - 120)) - 8;
+            canvas.style.width = cssW + 'px';
+            canvas.style.height = cssH + 'px';
+            canvas.width = cssW * ratio;
+            canvas.height = cssH * ratio;
+            canvas.getContext('2d').scale(ratio, ratio);
+            this._sigFsBigPad = new SignaturePad(canvas, { backgroundColor: 'rgb(255,255,255)', penColor: 'rgb(0,0,0)', minWidth: 0.8, maxWidth: 2.6, velocityFilterWeight: 0.7 });
+            this._sigFsBigPad._ratio = ratio;
+        }, { once: true });
+        inst.show();
+    },
+
+    _applySignatureFullscreen() {
+        const big = this._sigFsBigPad;
+        const origin = this._sigFsPad;
+        const modal = document.getElementById('sig-fs-modal');
+        const inst = modal && bootstrap.Modal.getInstance(modal);
+        const close = () => { if (inst) inst.hide(); };
+        if (!big || !origin || big.isEmpty()) { close(); return; } // rien dessiné -> ne touche pas l'existant
+        const url = big.toDataURL('image/png');
+        origin.clear();
+        origin.on(); // doit être éditable pour recevoir le tracé
+        origin.fromDataURL(url, { ratio: origin._ratio || 1 }).then(() => {
+            if (origin._setLocked) origin._setLocked(true); // verrouille comme le Valider inline
+            close();
+        }).catch(close);
     },
 
     // #11 — Detache les listeners resize des pads de signature (a appeler avant
