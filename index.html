@@ -8955,9 +8955,47 @@ window.VMC_BUILD = '2026-03-02 16:59';
 console.log('VMC PWA Build:', window.VMC_BUILD);
 
 if ('serviceWorker' in navigator) {
+    const _hadController = !!navigator.serviceWorker.controller;
     navigator.serviceWorker.register('./sw.js')
-        .then(reg => console.log('SW enregistre:', reg.scope))
+        .then(reg => { console.log('SW enregistre:', reg.scope); try { reg.update(); } catch (_) {} })
         .catch(err => console.warn('SW erreur:', err));
+
+    // Verifie les MAJ quand l'app repasse au premier plan (essentiel sur PWA
+    // installee : la relance depuis l'icone ne recharge pas la page).
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+            navigator.serviceWorker.getRegistration().then(r => r && r.update()).catch(() => {});
+        }
+    });
+
+    // Un nouveau SW a pris le controle (nouvelle version deployee).
+    // NE PAS recharger si une saisie est en cours ou si des donnees ne sont pas
+    // encore synchronisees : un reload relance le pull et peut ecraser la base
+    // locale -> perte des saisies non poussees. Sinon : bandeau "Nouvelle version".
+    let _swRefreshing = false;
+    const _swSafeToReload = () => {
+        try {
+            if (typeof DataSync !== 'undefined' && DataSync._dirty) return false; // modifs non synchronisees
+            const h = (location.hash || '').slice(1);
+            if (h.startsWith('vmc-new') || h.startsWith('vmc-edit')) return false; // formulaire de saisie ouvert
+            if (document.querySelector('.modal.show')) return false; // une fenetre est ouverte
+        } catch (_) {}
+        return true;
+    };
+    const _swShowUpdateBanner = () => {
+        if (document.getElementById('sw-update-banner')) return;
+        const b = document.createElement('div');
+        b.id = 'sw-update-banner';
+        b.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:20000;background:#0d6efd;color:#fff;padding:8px 14px;display:flex;align-items:center;justify-content:center;gap:12px;box-shadow:0 -2px 8px rgba(0,0,0,.25);font-size:14px';
+        b.innerHTML = '<span><i class="bi bi-exclamation-triangle-fill me-1"></i>Nouvelle version disponible. <strong>Enregistrez la saisie en cours</strong> avant de recharger.</span><button class="btn btn-light btn-sm fw-bold" id="sw-reload-btn">Recharger</button>';
+        document.body.appendChild(b);
+        document.getElementById('sw-reload-btn').onclick = () => { _swRefreshing = true; location.reload(); };
+    };
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (_swRefreshing || !_hadController) return; // 1er chargement : pas de reload
+        if (_swSafeToReload()) { _swRefreshing = true; location.reload(); return; }
+        _swShowUpdateBanner(); // differe : pas de reload tant que la saisie n'est pas securisee
+    });
 }
 
 // Controle quota stockage (avertissement Safari iOS ~50MB)

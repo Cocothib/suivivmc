@@ -6,7 +6,7 @@
    - API Graph Microsoft : network-only (pas de cache API)
    ============================================================= */
 
-const CACHE_NAME = 'vmc-pwa-v39';
+const CACHE_NAME = 'vmc-pwa-v40';
 const APP_SHELL = ['./index.html', './manifest.json'];
 
 /* --- Installation : pre-cache du shell --- */
@@ -14,9 +14,12 @@ self.addEventListener('install', (event) => {
     event.waitUntil(
         caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL))
     );
-    // #28 — pas de skipWaiting() automatique : le nouveau SW reste en "waiting"
-    // pour eviter de charger un shell N+1 pendant une edition en cours.
-    // (Un flow de mise a jour pilote par l'UI pourra l'activer plus tard.)
+    // Activation immediate du nouveau SW (indispensable en PWA installee : l'app
+    // lancee depuis l'icone n'est jamais "fermee", donc un SW en waiting ne
+    // s'activerait jamais et l'app resterait bloquee sur l'ancienne version).
+    // Le risque "shell N+1 pendant une saisie" est gere cote page : le reload
+    // n'a lieu que si aucune saisie/modif n'est en cours, sinon bandeau differe.
+    self.skipWaiting();
 });
 
 /* --- Activation : nettoyage anciens caches --- */
