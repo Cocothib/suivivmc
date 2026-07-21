@@ -2917,7 +2917,7 @@ const SharedRef = (() => {
   const SCHEMA_VERSION = 1;
   const CACHE_KEY = 'cache';                 // prefixe localStorage : 'sharedref:cache'
   const REFRESH_MS = 60 * 60 * 1000;         // relecture au plus une fois / heure
-  const SECTIONS = ['entreprises', 'chantiers', 'personnel', 'agences', 'exutoires'];
+  const SECTIONS = ['entreprises', 'chantiers', 'personnel', 'agences', 'exutoires', 'events_suivivmc'];
 
   // Primitives injectees par configure() (specifiques a chaque app)
   let io = {
@@ -3053,6 +3053,35 @@ SharedRef.configure({
   userName: () => localStorage.getItem('vmc_user_name') || 'Inconnu',
 });
 try { window.SharedRef = SharedRef; } catch (_) {}
+
+/* Passerelle montante VMC -> SuiviNC (Lot D).
+ * Publie des evenements kind:'nc' dans la section events_suivivmc du
+ * referentiel partage ; SuiviNC les ingere et cree une non-conformite par
+ * item (idempotent sur id). Emission UNIQUEMENT sur action utilisateur. */
+const SharedEvents = (() => {
+  const SECTION = 'events_suivivmc';
+  const OWNER = 'suivivmc';
+  const MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;   // purge des evenements > 90 jours
+  const MAX_ITEMS = 199;                          // garde les 199 derniers (+1 nouveau)
+
+  async function emit(evt) {
+    if (!evt || !evt.id) throw new Error('[SharedEvents] evt.id requis');
+    await SharedRef.read({ force: true });
+    const now = Date.now();
+    let items = SharedRef.get(SECTION).filter(it => {
+      const t = it && it.ts ? Date.parse(it.ts) : NaN;
+      return Number.isFinite(t) && (now - t) < MAX_AGE_MS;
+    });
+    if (items.length > MAX_ITEMS) items = items.slice(-MAX_ITEMS);
+    if (items.some(it => it && it.id === evt.id)) return 'duplicate';
+    items.push({ ...evt, kind: 'nc', app: 'suivivmc', ts: new Date().toISOString() });
+    await SharedRef.publish(SECTION, items, { owner: OWNER });
+    return 'ok';
+  }
+
+  return { SECTION, OWNER, emit };
+})();
+try { window.SharedEvents = SharedEvents; } catch (_) {}
 
 async function _listFiles(folderPath) {
     const driveId = await _getDriveId();
@@ -5557,12 +5586,25 @@ const DashboardPage = {
                     </div>
                 </div>
             </div>
+        </div>
+
+        <!-- Plan d'actions QSE (SuiviNC) — lecture seule du referentiel partage -->
+        <div class="row g-3 mt-1">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header bg-white fw-bold">\u{1F4CB} Plan d'actions QSE (SuiviNC)</div>
+                    <div class="card-body" id="dashboard-nc-actions">
+                        <div class="small text-muted">Chargement du référentiel partagé…</div>
+                    </div>
+                </div>
+            </div>
         </div>`;
 
         this._renderChart(visites, vmcsAnnee, annee);
         this._renderProchaines(visites, conducteurs);
         this._renderActionsRecentes(actions, vmcs, conducteurs);
         this._bindKpiCards();
+        this._renderNcActions();
     },
 
     _bindKpiCards() {
@@ -5664,6 +5706,76 @@ const DashboardPage = {
                 <td><span class="badge bg-${statutColors[a.statut] || 'secondary'}">${a.statut || '-'}</span></td>
             </tr>`;
         }).join('');
+    },
+
+    /* Plan d'actions QSE (SuiviNC) — lecture seule du referentiel partage.
+     * Affiche 3 compteurs + une liste compacte (max 8) triee par echeance,
+     * retard en premier, ecarts terrain mis en avant (badge). */
+    async _renderNcActions() {
+        const body = document.getElementById('dashboard-nc-actions');
+        if (!body) return;
+        const vide = '<div class="small text-muted">Référentiel partagé indisponible ou vide.</div>';
+        try {
+            await SharedRef.read().catch(() => null);
+            const ncs     = SharedRef.get('nc') || [];
+            const actions = SharedRef.get('actions') || [];
+            if (!ncs.length && !actions.length) { body.innerHTML = vide; return; }
+
+            const today = new Date().toISOString().slice(0, 10);
+            const items = [
+                ...ncs.map(n => ({
+                    ref: n.ref || n.id || '?', libelle: n.objet || '', pilote: n.pilote || '',
+                    echeance: n.echeance || '', source: n.source || '', kind: 'NC'
+                })),
+                ...actions.map(a => ({
+                    ref: a.ref || a.id || '?', libelle: a.titre || '', pilote: a.pilote || '',
+                    echeance: a.echeance || '', source: a.source || '', kind: 'Action'
+                }))
+            ];
+            const enRetard = items.filter(i => i.echeance && i.echeance < today).length;
+
+            // Tri : retard d'abord, puis echeance croissante, sans echeance en dernier ;
+            // a egalite, les ecarts terrain (visites de chantier) en tete.
+            items.sort((a, b) => {
+                const ra = a.echeance && a.echeance < today ? 0 : 1;
+                const rb = b.echeance && b.echeance < today ? 0 : 1;
+                if (ra !== rb) return ra - rb;
+                const ea = a.echeance || '9999-12-31';
+                const eb = b.echeance || '9999-12-31';
+                if (ea !== eb) return ea.localeCompare(eb);
+                return (a.source === 'terrain' ? 0 : 1) - (b.source === 'terrain' ? 0 : 1);
+            });
+
+            const lignes = items.slice(0, 8).map(i => {
+                const retard = i.echeance && i.echeance < today;
+                const badgeEch = i.echeance
+                    ? `<span class="badge ${retard ? 'bg-danger' : 'bg-light text-dark border'}">${this._fmtDate(i.echeance)}</span>`
+                    : '<span class="text-muted">-</span>';
+                const badgeTerrain = i.source === 'terrain'
+                    ? ' <span class="badge bg-warning text-dark">Terrain</span>' : '';
+                const lib = (i.libelle || '').length > 60 ? i.libelle.slice(0, 57) + '…' : (i.libelle || '');
+                return `<tr>
+                    <td class="fw-bold text-nowrap">${this._escHtml(i.ref)}<span class="badge bg-secondary ms-1">${i.kind}</span>${badgeTerrain}</td>
+                    <td class="text-truncate" style="max-width:260px">${this._escHtml(lib)}</td>
+                    <td class="text-nowrap">${this._escHtml(i.pilote || '-')}</td>
+                    <td class="text-nowrap">${badgeEch}</td>
+                </tr>`;
+            }).join('');
+
+            body.innerHTML = `
+                <div class="d-flex flex-wrap gap-3 small mb-2">
+                    <span><span class="badge bg-danger">${ncs.length}</span> NC ouverte${ncs.length > 1 ? 's' : ''}</span>
+                    <span><span class="badge bg-warning text-dark">${actions.length}</span> action${actions.length > 1 ? 's' : ''} en cours</span>
+                    <span><span class="badge ${enRetard > 0 ? 'bg-danger' : 'bg-success'}">${enRetard}</span> en retard</span>
+                </div>
+                <div class="table-responsive"><table class="table table-sm table-hover mb-0">
+                    <thead><tr><th>Réf.</th><th>Libellé</th><th>Pilote</th><th>Échéance</th></tr></thead>
+                    <tbody>${lignes}</tbody>
+                </table></div>
+                ${items.length > 8 ? `<div class="small text-muted mt-1">${items.length - 8} autre${items.length - 8 > 1 ? 's' : ''} élément${items.length - 8 > 1 ? 's' : ''} non affiché${items.length - 8 > 1 ? 's' : ''}.</div>` : ''}`;
+        } catch (_) {
+            body.innerHTML = vide;
+        }
     },
 
     _fmtDate(iso) {
@@ -7798,8 +7910,10 @@ const ActionsPage = {
                         <button class="btn btn-outline-primary btn-edit-action" data-id="${a.id}" title="Modifier">\u270E</button>
                         ${a.statut !== 'Soldee' ? `<button class="btn btn-outline-info btn-mail-action" data-id="${a.id}" title="Envoyer un rappel par email">\u{1F4E7}</button>` : ''}
                         ${a.statut !== 'Soldee' ? `<button class="btn btn-outline-success btn-close-action" data-id="${a.id}" title="Solder">\u2714</button>` : ''}
+                        ${!a.ncTransmis ? `<button class="btn btn-outline-warning btn-nc-action" data-id="${a.id}" title="Transmettre \u00e0 SuiviNC">\u{1F4E4}</button>` : ''}
                         <button class="btn btn-outline-danger btn-del-action" data-id="${a.id}" title="Supprimer">\u{1F5D1}</button>
                     </div>
+                    ${a.ncTransmis ? `<span class="badge bg-success ms-1" title="Transmis le ${a.ncTransmisLe ? this._fmtDate(a.ncTransmisLe.slice(0, 10)) : '-'}">Transmis \u00e0 SuiviNC</span>` : ''}
                 </td>
             </tr>`;
         }).join('');
@@ -7833,6 +7947,44 @@ const ActionsPage = {
                     await DB.deleteAction(Number(b.dataset.id));
                     showToast('Action supprimée', 'warning');
                     this._applyFilters();
+                }
+            };
+        });
+
+        tbody.querySelectorAll('.btn-nc-action').forEach(b => {
+            b.onclick = async () => {
+                const action = await DB.getAction(Number(b.dataset.id));
+                if (!action) return;
+                if (action.ncTransmis) { showToast('Déjà transmis à SuiviNC', 'warning'); return; }
+                const vmc = action.vmcId ? this._vmcMap[action.vmcId] : null;
+                const dateVmc = vmc?.date ? this._fmtDate(vmc.date) : '';
+                const evt = {
+                    id: 'evt-vmc-' + (action.vmcId != null ? action.vmcId : 'na') + '-' + action.id,
+                    source: 'terrain',
+                    type: '',
+                    objet: (action.description || 'Écart relevé en VMC').slice(0, 140),
+                    client: '',
+                    zone: vmc?.site || '',
+                    pilote: action.responsable || vmc?.conducteurNom || '',
+                    gravite: '',
+                    comment: 'Écart relevé en visite managériale de chantier' + (dateVmc ? ' du ' + dateVmc : ''),
+                    refExterne: vmc ? ('VMC ' + (vmc.conducteurNom || '') + (dateVmc ? ' - ' + dateVmc : '')).trim() : ''
+                };
+                b.disabled = true;
+                try {
+                    const res = await SharedEvents.emit(evt);
+                    action.ncTransmis = true;
+                    action.ncTransmisLe = new Date().toISOString();
+                    action.updatedAt = new Date().toISOString();
+                    await DB.putAction(action);
+                    showToast(res === 'duplicate'
+                        ? 'Déjà transmis à SuiviNC'
+                        : 'Écart transmis à SuiviNC (une non-conformité sera créée)');
+                    this._applyFilters();
+                } catch (e) {
+                    console.error('SuiviVMC: transmission SuiviNC echouee -', e);
+                    b.disabled = false;
+                    showToast('Transmission impossible (hors connexion ?), réessayez plus tard', 'warning');
                 }
             };
         });
