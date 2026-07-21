@@ -6545,10 +6545,12 @@ const VmcFormPage = {
                                 <option value="" ${!selectedConducteurId ? 'selected' : ''}>-- Sélectionner --</option>
                                 ${conducteurs.map(c => `<option value="${c.id}" ${Number(c.id) === Number(selectedConducteurId) && selectedConducteurId ? 'selected' : ''}>${this._escHtml(c.nom)} (${this._escHtml(c.agence)})</option>`).join('')}
                             </select>
+                            <div id="vmc-conducteur-alertes" class="small mt-1"></div>
                         </div>
                         <div class="mb-2">
                             <label class="form-label">Site / Lieu</label>
-                            <input type="text" class="form-control" id="vmc-site" value="${this._escAttr(vmc?.site || '')}" placeholder="Nom du chantier ou lieu">
+                            <input type="text" class="form-control" id="vmc-site" list="vmc-site-suggestions" value="${this._escAttr(vmc?.site || '')}" placeholder="Nom du chantier ou lieu">
+                            <datalist id="vmc-site-suggestions"></datalist>
                         </div>
                         <div class="mb-2">
                             <label class="form-label">Personne observée</label>
@@ -7270,8 +7272,97 @@ const VmcFormPage = {
         this._signaturePadObserve = this._setupSignaturePad('signature-canvas-observe', 'btn-clear-sig-observe', existingObserve);
     },
 
+    /* ================================================================
+       Référentiel partagé (Lot 2) — consommation en lecture seule.
+       Suggestions de chantiers sur le champ Site (datalist, saisie libre
+       conservée) + alerte informative habilitation / visite médicale sur
+       l'observateur sélectionné. Purement informatif, jamais bloquant ;
+       sections vides ou lecture en échec => aucun effet, aucune erreur.
+       ================================================================ */
+    _initSharedRefSuggestions() {
+        if (typeof SharedRef === 'undefined') return;
+        SharedRef.read().catch(() => null).then(() => {
+            try {
+                this._fillSiteDatalist();
+                this._bindConducteurRefAlertes();
+            } catch (e) {
+                console.warn('[SharedRef] enrichissement formulaire ignoré :', e && e.message);
+            }
+        });
+    },
+
+    _fillSiteDatalist() {
+        const datalist = document.getElementById('vmc-site-suggestions');
+        if (!datalist) return;
+        const chantiers = SharedRef.get('chantiers') || [];
+        if (!chantiers.length) return;
+        const vus = new Set();
+        datalist.innerHTML = chantiers.map(c => {
+            const nom = (c && c.nom != null) ? String(c.nom).trim() : '';
+            if (!nom) return '';
+            const label = c.entite ? nom + ' — ' + String(c.entite).trim() : nom;
+            const cle = label.toLowerCase();
+            if (vus.has(cle)) return '';
+            vus.add(cle);
+            return `<option value="${this._escAttr(label)}"></option>`;
+        }).join('');
+    },
+
+    _bindConducteurRefAlertes() {
+        const sel = document.getElementById('vmc-conducteur');
+        const zone = document.getElementById('vmc-conducteur-alertes');
+        if (!sel || !zone) return;
+        const personnel = SharedRef.get('personnel') || [];
+        if (!personnel.length) return;
+        // Index par slug du nom complet, dans les deux ordres (les noms VMC
+        // sont « Prénom NOM », le référentiel sépare nom / prénom).
+        const slug = SharedRef.slug;
+        const index = new Map();
+        personnel.forEach(p => {
+            if (!p) return;
+            const k1 = slug((p.prenom || '') + ' ' + (p.nom || ''));
+            const k2 = slug((p.nom || '') + ' ' + (p.prenom || ''));
+            if (k1) index.set(k1, p);
+            if (k2) index.set(k2, p);
+        });
+        const estPassee = (s) => {
+            if (!s) return false;
+            const d = new Date(s);
+            return !isNaN(d.getTime()) && d.getTime() < new Date(new Date().toDateString()).getTime();
+        };
+        const verifier = () => {
+            zone.innerHTML = '';
+            const opt = sel.selectedOptions && sel.selectedOptions[0];
+            const nomComplet = (sel.value && opt) ? opt.textContent.split(' (')[0].trim() : '';
+            if (!nomComplet) return;
+            const p = index.get(slug(nomComplet));
+            if (!p) return;
+            const messages = [];
+            (Array.isArray(p.habilitations) ? p.habilitations : []).forEach(h => {
+                if (h && h.dateValidite && estPassee(h.dateValidite)) {
+                    const libelle = h.symbole || h.type || '';
+                    messages.push(`Habilitation ${libelle} expirée le ${this._fmtDate(h.dateValidite)}`.replace('  ', ' '));
+                }
+            });
+            const vmDate = p.visiteMedicale && p.visiteMedicale.date;
+            if (vmDate && estPassee(vmDate)) {
+                messages.push(`Visite médicale expirée le ${this._fmtDate(vmDate)}`);
+            }
+            if (messages.length) {
+                zone.innerHTML = messages.map(m =>
+                    `<div><span class="badge bg-warning text-dark">⚠️ ${this._escHtml(m)}</span></div>`
+                ).join('');
+            }
+        };
+        sel.addEventListener('change', verifier);
+        verifier();  // observateur pré-sélectionné (édition ou visite planifiée)
+    },
+
     _bindForm(isEdit, vmc, visite) {
         const form = document.getElementById('form-vmc');
+
+        // Référentiel partagé : suggestions + alertes (asynchrone, non bloquant)
+        this._initSharedRefSuggestions();
 
         // Changer la grille quand le type ou le scénario change (seulement pour nouvelle VMC)
         if (!isEdit) {
