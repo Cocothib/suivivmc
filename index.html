@@ -2410,9 +2410,14 @@ const DB = {
 /* =============================================================
    effectif.js - Periode de presence des observateurs
    Un observateur peut arriver ou quitter l'entreprise en cours
-   d'annee : les mois hors presence ne doivent compter ni dans
-   l'objectif (denominateur du taux) ni dans les retards.
-   Champs portes par l'observateur : dateEntree / dateSortie (YYYY-MM-DD)
+   d'annee, ou etre absent longue duree (arret maladie, conge) :
+   les mois concernes ne doivent compter ni dans l'objectif
+   (denominateur du taux) ni dans les retards.
+   Champs portes par l'observateur :
+     - dateEntree / dateSortie : YYYY-MM-DD (entree / sortie des effectifs)
+     - absences : [{ debut, fin, motif }] - fin vide = absence en cours
+     - nonApplicable : true = hors perimetre VMC (ex. entite sans acces
+       au module), aucune VMC attendue tant que le statut est actif
    ============================================================= */
 const Effectif = {
     /** Observateur present a la date de reference (par defaut aujourd'hui) */
@@ -2424,12 +2429,39 @@ const Effectif = {
         return true;
     },
 
-    /** Present a la date donnee (YYYY-MM-DD) */
+    /** Present dans les effectifs a la date donnee (YYYY-MM-DD), absences ignorees */
     presentLe(cond, dateStr) {
         if (!cond || !dateStr) return true;
         if (cond.dateEntree && dateStr < cond.dateEntree) return false;
         if (cond.dateSortie && dateStr > cond.dateSortie) return false;
         return true;
+    },
+
+    /** Observateur dans le perimetre du suivi VMC */
+    estConcerne(cond) {
+        return !!cond && cond.nonApplicable !== true;
+    },
+
+    /** Absence couvrant la date donnee, sinon null */
+    absenceLe(cond, dateStr) {
+        if (!cond || !dateStr || !Array.isArray(cond.absences)) return null;
+        return cond.absences.find(a => a && a.debut && dateStr >= a.debut && (!a.fin || dateStr <= a.fin)) || null;
+    },
+
+    /** Absence en cours a la date de reference (par defaut aujourd'hui) */
+    absenceEnCours(cond, dateRef = null) {
+        return this.absenceLe(cond, dateRef || new Date().toISOString().slice(0, 10));
+    },
+
+    /** Dans le perimetre, present et non absent : une VMC peut etre attendue */
+    disponibleLe(cond, dateStr) {
+        return this.estConcerne(cond) && this.presentLe(cond, dateStr) && !this.absenceLe(cond, dateStr);
+    },
+
+    /** Dans les effectifs et en mesure de realiser des VMC aujourd'hui */
+    estDisponible(cond, dateRef = null) {
+        const ref = dateRef || new Date().toISOString().slice(0, 10);
+        return this.estConcerne(cond) && this.estActif(cond, ref) && !this.absenceLe(cond, ref);
     },
 
     /** Present au moins un jour sur la periode [debut, fin] */
@@ -2444,7 +2476,16 @@ const Effectif = {
     moisDu(cond, annee, mois) {
         const mm = String(mois).padStart(2, '0');
         const dateRef = `${annee}-${mm}-15`;
-        return this.presentLe(cond, dateRef);
+        return this.disponibleLe(cond, dateRef);
+    },
+
+    /** Motif d'exclusion d'un mois : null | 'non-applicable' | 'hors-effectif' | 'absence' */
+    motifMois(cond, annee, mois) {
+        const dateRef = `${annee}-${String(mois).padStart(2, '0')}-15`;
+        if (!this.estConcerne(cond)) return 'non-applicable';
+        if (!this.presentLe(cond, dateRef)) return 'hors-effectif';
+        if (this.absenceLe(cond, dateRef)) return 'absence';
+        return null;
     },
 
     /**
@@ -2454,7 +2495,7 @@ const Effectif = {
     estDue(cond, v) {
         if (!v || v.annulee) return false;
         if (v.statut === 'realise') return true;
-        return this.presentLe(cond, v.datePrevue || `${v.annee}-${String(v.mois).padStart(2, '0')}-15`);
+        return this.disponibleLe(cond, v.datePrevue || `${v.annee}-${String(v.mois).padStart(2, '0')}-15`);
     },
 
     /** Nombre de VMC attendues sur l'annee (prorata arrivee / depart) */
@@ -2470,6 +2511,15 @@ const Effectif = {
         if (cond.dateSortie && cond.dateSortie < today) {
             return { code: 'parti', label: `Parti le ${this.fmt(cond.dateSortie)}`, cls: 'bg-secondary' };
         }
+        if (!this.estConcerne(cond)) {
+            return { code: 'na', label: cond.motifNA || 'Non applicable', cls: 'bg-light text-dark border' };
+        }
+        const abs = this.absenceEnCours(cond, today);
+        if (abs) {
+            const motif = abs.motif ? `${abs.motif} ` : 'Absent ';
+            const fin = abs.fin ? ` (jusqu'au ${this.fmt(abs.fin)})` : '';
+            return { code: 'absent', label: `${motif}depuis le ${this.fmt(abs.debut)}${fin}`, cls: 'bg-warning text-dark' };
+        }
         if (cond.dateEntree && cond.dateEntree > today) {
             return { code: 'a-venir', label: `Arrivee le ${this.fmt(cond.dateEntree)}`, cls: 'bg-info text-dark' };
         }
@@ -2477,6 +2527,48 @@ const Effectif = {
             return { code: 'sortant', label: `Depart le ${this.fmt(cond.dateSortie)}`, cls: 'bg-warning text-dark' };
         }
         return { code: 'actif', label: 'Actif', cls: 'bg-success' };
+    },
+
+    /** Valeur de la liste deroulante "Presence" : actif | vacances | arret | na | parti */
+    statut(cond) {
+        const code = this.etat(cond).code;
+        if (code === 'parti') return 'parti';
+        if (code === 'na')    return 'na';
+        if (code === 'absent') {
+            const abs = this.absenceEnCours(cond) || {};
+            // Type memorise a la saisie ; sinon deduction depuis le motif (saisie manuelle)
+            if (abs.type && this.STATUTS.some(st => st.value === abs.type && st.kind === 'periode')) return abs.type;
+            const t = (abs.motif || '').toLowerCase();
+            if (t.includes('vacance')) return 'vacances';
+            if (t.includes('cong'))    return 'conge-long';
+            if (t.includes('intégr') || t.includes('integr')) return 'integration';
+            if (t.includes('poste') || t.includes('mutation')) return 'mutation';
+            if (t.includes('arrêt') || t.includes('arret') || t.includes('maladie')) return 'arret';
+            return 'suspension';
+        }
+        return 'actif';
+    },
+
+    /**
+     * Statuts proposes dans la liste "Presence".
+     * kind : 'actif' (aucune suspension) | 'periode' (absence datee)
+     *        | 'na' (hors perimetre, sans date) | 'parti' (sortie des effectifs)
+     */
+    STATUTS: [
+        { value: 'actif',       label: 'Actif',                      kind: 'actif' },
+        { value: 'vacances',    label: 'Vacances / congés',          kind: 'periode', motif: 'Vacances' },
+        { value: 'arret',       label: 'Arrêt de travail',           kind: 'periode', motif: 'Arrêt de travail' },
+        { value: 'conge-long',  label: 'Congé longue durée',         kind: 'periode', motif: 'Congé longue durée' },
+        { value: 'integration', label: 'En intégration (non formé)', kind: 'periode', motif: 'En intégration' },
+        { value: 'mutation',    label: 'Changement de poste',        kind: 'periode', motif: 'Changement de poste' },
+        { value: 'suspension',  label: 'Autre suspension',           kind: 'periode', motif: 'Suspension' },
+        { value: 'na',          label: 'Non applicable',             kind: 'na' },
+        { value: 'parti',       label: 'Parti (sortie effectifs)',   kind: 'parti' }
+    ],
+
+    /** Definition d'un statut par sa valeur */
+    statutDef(value) {
+        return this.STATUTS.find(st => st.value === value) || this.STATUTS[0];
     },
 
     fmt(iso) {
@@ -5088,16 +5180,20 @@ const ConfigPage = {
         const tbody = document.querySelector('#table-conducteurs tbody');
         tbody.innerHTML = conducteurs.map(c => {
             const etat = Effectif.etat(c);
+            const statut = Effectif.statut(c);
             const nbDus = Effectif.moisDusAnnee(c, annee);
             return `
-            <tr class="${etat.code === 'parti' ? 'text-muted' : ''}">
+            <tr class="${(etat.code === 'parti' || etat.code === 'na') ? 'text-muted' : ''}">
                 <td>${c.id}</td>
                 <td>${this._escHtml(c.nom || '')}</td>
                 <td>${c.email ? `<span class="text-muted small">${this._escHtml(c.email)}</span>` : '<span class="text-muted small fst-italic">non renseigné</span>'}</td>
                 <td>${this._escHtml(c.agence || '')}</td>
-                <td>
-                    <span class="badge ${etat.cls}">${this._escHtml(etat.label)}</span>
-                    ${nbDus < 12 ? `<div class="small text-muted">${nbDus} VMC attendue${nbDus > 1 ? 's' : ''} en ${annee}</div>` : ''}
+                <td style="min-width:190px">
+                    <select class="form-select form-select-sm sel-statut-cond" data-id="${c.id}">
+                        ${Effectif.STATUTS.map(st => `<option value="${st.value}" ${statut === st.value ? 'selected' : ''}>${st.label}</option>`).join('')}
+                    </select>
+                    ${etat.code !== 'actif' ? `<div class="small text-muted mt-1">${this._escHtml(etat.label)}</div>` : ''}
+                    <div class="small ${nbDus === 0 ? 'text-danger' : 'text-muted'}">${nbDus} VMC attendue${nbDus > 1 ? 's' : ''} en ${annee}</div>
                 </td>
                 <td class="text-nowrap">
                     <button class="btn btn-sm btn-outline-primary btn-edit-cond" data-id="${c.id}">\u270E</button>
@@ -5106,6 +5202,15 @@ const ConfigPage = {
             </tr>`; }).join('');
 
         this._renderOrphelins(conducteurs);
+        tbody.querySelectorAll('.sel-statut-cond').forEach(sel => {
+            const initial = sel.value;
+            sel.onchange = async () => {
+                const cond = await DB.getConducteur(Number(sel.dataset.id));
+                if (!cond) return;
+                const ok = await this._appliquerStatut(cond, sel.value);
+                if (!ok) sel.value = initial;
+            };
+        });
         document.getElementById('btn-add-cond').onclick = () => this._condModal();
         tbody.querySelectorAll('.btn-edit-cond').forEach(b => {
             b.onclick = async () => {
@@ -5206,6 +5311,13 @@ const ConfigPage = {
                     </div>
                 </div>
                 <div class="form-text">Laisser vide si l'observateur est présent toute l'année. Les mois situés hors de cette période sont retirés de l'objectif de VMC (indicateurs et planning).</div>
+                <hr class="my-3">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <label class="form-label mb-0 fw-bold">Absences longue durée</label>
+                    <button type="button" class="btn btn-sm btn-outline-primary" id="btn-add-absence">\u2795 Ajouter</button>
+                </div>
+                <div id="cond-absences"></div>
+                <div class="form-text">Arrêt maladie, congé parental, etc. Les VMC des mois couverts sont mises en attente : elles sortent de l'objectif et des retards, sans être supprimées. Laisser la date de fin vide tant que l'absence est en cours.</div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler</button>
@@ -5220,9 +5332,15 @@ const ConfigPage = {
         modalEl.addEventListener('hidden.bs.modal', () => DataSync._endEditing());
         modal.show();
 
+        this._renderAbsences(Array.isArray(cond?.absences) ? cond.absences : []);
+        document.getElementById('btn-add-absence').onclick = () => {
+            this._addAbsenceRow({ debut: '', fin: '', motif: '' });
+        };
+
         document.getElementById('form-cond').onsubmit = async e => {
             e.preventDefault();
             const data = {
+                ...(cond || {}),   // conserve les champs non edites ici (nonApplicable, motifNA...)
                 id:     Number(document.getElementById('cond-id').value),
                 nom:    document.getElementById('cond-nom').value.trim(),
                 email:  document.getElementById('cond-email').value.trim(),
@@ -5230,6 +5348,9 @@ const ConfigPage = {
                 dateEntree: document.getElementById('cond-entree').value || null,
                 dateSortie: document.getElementById('cond-sortie').value || null
             };
+            const absences = this._collectAbsences();
+            if (absences === null) return;
+            data.absences = absences;
             if (!data.nom || !data.id) return;
             if (data.dateEntree && data.dateSortie && data.dateSortie < data.dateEntree) {
                 showToast('La date de sortie doit être postérieure à la date d\'entrée', 'danger');
@@ -5247,6 +5368,203 @@ const ConfigPage = {
             showToast(isEdit ? 'Observateur modifié' : (isRestore ? 'Observateur restauré' : 'Observateur ajouté'));
             ConfigPage.render(document.getElementById('app-content'));
         };
+    },
+
+    /**
+     * Applique un statut choisi dans la liste "Presence".
+     * Retourne true si l'observateur a ete enregistre, false si annule.
+     */
+    async _appliquerStatut(cond, statut) {
+        const today = new Date().toISOString().slice(0, 10);
+        const data = { ...cond };
+        const absences = Array.isArray(data.absences) ? data.absences.map(a => ({ ...a })) : [];
+
+        // Cloture l'absence eventuellement en cours a la date donnee (veille du retour)
+        const cloreAbsence = (dateRetour) => {
+            const abs = absences.find(a => a.debut && a.debut <= today && !a.fin);
+            if (!abs) return;
+            const veille = new Date(dateRetour + 'T12:00:00');
+            veille.setDate(veille.getDate() - 1);
+            const finIso = veille.toISOString().slice(0, 10);
+            // Absence jamais commencee : on la retire plutot que de creer une periode vide
+            if (finIso < abs.debut) absences.splice(absences.indexOf(abs), 1);
+            else abs.fin = finIso;
+        };
+
+        if (statut === 'actif') {
+            data.nonApplicable = false;
+            delete data.motifNA;
+            if (data.dateSortie) {
+                if (!confirm(`Réintégrer ${cond.nom} dans les effectifs (la date de sortie du ${Effectif.fmt(data.dateSortie)} sera effacée) ?`)) return false;
+                data.dateSortie = null;
+            }
+            const retour = await this._demanderDate('Retour de ' + cond.nom, 'Date de reprise', today);
+            if (retour === null) return false;
+            cloreAbsence(retour);
+        } else if (statut === 'na') {
+            const motif = prompt(`Motif du statut « Non applicable » pour ${cond.nom} :`, cond.motifNA || 'Pas d\'accès au module');
+            if (motif === null) return false;
+            data.nonApplicable = true;
+            data.motifNA = (motif || '').trim() || 'Non applicable';
+        } else if (statut === 'parti') {
+            const sortie = await this._demanderDate('Départ de ' + cond.nom, 'Date de sortie des effectifs', cond.dateSortie || today);
+            if (sortie === null) return false;
+            data.dateSortie = sortie;
+            data.nonApplicable = false;
+        } else if (Effectif.statutDef(statut).kind === 'periode') {
+            const def = Effectif.statutDef(statut);
+            const periode = await this._demanderPeriode(`${def.label} - ${cond.nom}`, def.motif);
+            if (periode === null) return false;
+            data.nonApplicable = false;
+            cloreAbsence(periode.debut);
+            absences.push({
+                debut: periode.debut,
+                fin:   periode.fin || null,
+                motif: periode.motif || def.motif,
+                type:  statut
+            });
+        }
+
+        data.absences = absences.filter(a => a && a.debut).sort((a, b) => a.debut.localeCompare(b.debut));
+        await DB.putConducteur(data);
+        showToast(`${cond.nom} : ${Effectif.statutDef(statut).label}`);
+        ConfigPage.render(document.getElementById('app-content'));
+        return true;
+    },
+
+    /** Petite fenetre de saisie d'une date. Resout null si annule. */
+    _demanderDate(titre, label, valeur) {
+        return this._promptModal(titre, `
+            <div class="mb-2">
+                <label class="form-label">${label}</label>
+                <input type="date" class="form-control" id="prompt-date" value="${valeur || ''}" required>
+            </div>`,
+            () => {
+                const d = document.getElementById('prompt-date').value;
+                if (!d) { showToast('Date obligatoire', 'danger'); return undefined; }
+                return d;
+            });
+    },
+
+    /** Saisie d'une periode debut / fin / motif. Resout null si annule. */
+    _demanderPeriode(titre, motifDefaut) {
+        const today = new Date().toISOString().slice(0, 10);
+        return this._promptModal(titre, `
+            <div class="row g-2">
+                <div class="col-6">
+                    <label class="form-label">Début</label>
+                    <input type="date" class="form-control" id="prompt-debut" value="${today}" required>
+                </div>
+                <div class="col-6">
+                    <label class="form-label">Fin (si connue)</label>
+                    <input type="date" class="form-control" id="prompt-fin">
+                </div>
+                <div class="col-12">
+                    <label class="form-label">Motif</label>
+                    <input type="text" class="form-control" id="prompt-motif" value="${this._escAttr(motifDefaut || '')}">
+                </div>
+            </div>
+            <div class="form-text mt-2">Les VMC dont la date prévue tombe dans cette période sont mises en attente : elles sortent de l'objectif et des retards. Fin vide = période en cours.</div>`,
+            () => {
+                const debut = document.getElementById('prompt-debut').value;
+                const fin   = document.getElementById('prompt-fin').value;
+                const motif = document.getElementById('prompt-motif').value.trim();
+                if (!debut) { showToast('Date de début obligatoire', 'danger'); return undefined; }
+                if (fin && fin < debut) { showToast('La fin doit suivre le début', 'danger'); return undefined; }
+                return { debut, fin: fin || null, motif };
+            });
+    },
+
+    /**
+     * Modale generique de saisie.
+     * `lire` renvoie la valeur a resoudre, ou undefined pour laisser la modale ouverte.
+     */
+    _promptModal(titre, corpsHtml, lire) {
+        return new Promise(resolve => {
+            const id = 'modal-prompt-statut';
+            document.getElementById(id)?.remove();
+            document.body.insertAdjacentHTML('beforeend', `
+            <div class="modal fade" id="${id}" tabindex="-1"><div class="modal-dialog modal-sm"><div class="modal-content">
+                <div class="modal-header">
+                    <h6 class="modal-title">${this._escHtml(titre)}</h6>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <form id="form-prompt-statut">
+                <div class="modal-body">${corpsHtml}</div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Annuler</button>
+                    <button type="submit" class="btn btn-primary btn-sm">Valider</button>
+                </div>
+                </form>
+            </div></div></div>`);
+
+            const el = document.getElementById(id);
+            const modal = new bootstrap.Modal(el);
+            let valeur = null;
+            el.addEventListener('shown.bs.modal', () => DataSync._beginEditing());
+            el.addEventListener('hidden.bs.modal', () => {
+                DataSync._endEditing();
+                el.remove();
+                resolve(valeur);
+            });
+            document.getElementById('form-prompt-statut').onsubmit = e => {
+                e.preventDefault();
+                const v = lire();
+                if (v === undefined) return;
+                valeur = v;
+                modal.hide();
+            };
+            modal.show();
+        });
+    },
+
+    /* --- Absences longue duree d'un observateur --- */
+    _renderAbsences(absences) {
+        const zone = document.getElementById('cond-absences');
+        if (!zone) return;
+        zone.innerHTML = '';
+        absences.forEach(a => this._addAbsenceRow(a));
+    },
+
+    _addAbsenceRow(a) {
+        const zone = document.getElementById('cond-absences');
+        if (!zone) return;
+        const row = document.createElement('div');
+        row.className = 'row g-2 align-items-end mb-2 absence-row';
+        row.innerHTML = `
+            <div class="col-4">
+                <label class="form-label small mb-0">Début *</label>
+                <input type="date" class="form-control form-control-sm abs-debut" value="${a?.debut || ''}">
+            </div>
+            <div class="col-4">
+                <label class="form-label small mb-0">Fin</label>
+                <input type="date" class="form-control form-control-sm abs-fin" value="${a?.fin || ''}">
+            </div>
+            <div class="col-3">
+                <label class="form-label small mb-0">Motif</label>
+                <input type="text" class="form-control form-control-sm abs-motif" value="${this._escAttr(a?.motif || '')}" placeholder="Arrêt maladie">
+            </div>
+            <div class="col-1 text-end">
+                <button type="button" class="btn btn-sm btn-outline-danger btn-del-absence" title="Supprimer">\u{1F5D1}</button>
+            </div>`;
+        zone.appendChild(row);
+        row.querySelector('.btn-del-absence').onclick = () => row.remove();
+    },
+
+    /** Lit les lignes du formulaire ; retourne null si une saisie est invalide */
+    _collectAbsences() {
+        const rows = [...document.querySelectorAll('#cond-absences .absence-row')];
+        const absences = [];
+        for (const r of rows) {
+            const debut = r.querySelector('.abs-debut').value;
+            const fin   = r.querySelector('.abs-fin').value;
+            const motif = r.querySelector('.abs-motif').value.trim();
+            if (!debut && !fin && !motif) continue;
+            if (!debut) { showToast('Chaque absence doit avoir une date de début', 'danger'); return null; }
+            if (fin && fin < debut) { showToast('La fin d\'absence doit suivre son début', 'danger'); return null; }
+            absences.push({ debut, fin: fin || null, motif: motif || 'Absence' });
+        }
+        return absences.sort((a, b) => a.debut.localeCompare(b.debut));
     },
 
     /* --- Gestion dynamique des types de grille --- */
@@ -5636,7 +5954,10 @@ const DashboardPage = {
         // Effectif : on ne compte que les mois ou l'observateur fait partie des effectifs
         const condMap = Object.fromEntries(conducteurs.map(c => [c.id, c]));
         const conducteursActifs = conducteurs.filter(c => Effectif.estActif(c));
-        const nbPartis = conducteurs.length - conducteursActifs.length;
+        const conducteursDispo  = conducteurs.filter(c => Effectif.estDisponible(c));
+        const nbPartis  = conducteurs.length - conducteursActifs.length;
+        const nbNA      = conducteurs.filter(c => !Effectif.estConcerne(c)).length;
+        const nbAbsents = conducteursActifs.length - conducteursDispo.length - conducteursActifs.filter(c => !Effectif.estConcerne(c)).length;
 
         // Visites dues = objectif reel (hors annulees, hors mois avant arrivee / apres depart)
         const visitesDues = visites.filter(v => Effectif.estDue(condMap[v.conducteurId], v));
@@ -5673,8 +5994,10 @@ const DashboardPage = {
                 <div class="card kpi-card border-top border-primary" id="kpi-conducteurs" role="button" style="cursor:pointer">
                     <div class="card-body text-center py-3">
                         <div class="kpi-icon text-primary">\u{1F465}</div>
-                        <div class="kpi-value">${conducteursActifs.length}${nbPartis ? `<small class="text-muted fs-6">/${conducteurs.length}</small>` : ''}</div>
-                        <div class="kpi-label">Observateurs${nbPartis ? ' actifs' : ''}</div>
+                        <div class="kpi-value">${conducteursDispo.length}${(nbPartis || nbAbsents) ? `<small class="text-muted fs-6">/${conducteurs.length}</small>` : ''}</div>
+                        <div class="kpi-label">Observateurs${(nbPartis || nbAbsents) ? ' actifs' : ''}</div>
+                        ${nbAbsents ? `<div class="small text-muted">${nbAbsents} en absence</div>` : ''}
+                        ${nbNA ? `<div class="small text-muted">${nbNA} hors périmètre</div>` : ''}
                     </div>
                 </div>
             </div>
@@ -5720,7 +6043,7 @@ const DashboardPage = {
                             <div class="progress-bar bg-primary" style="width:${Math.min(100, tauxConf)}%">${tauxConf}%</div>
                         </div>
                         <div class="small text-muted mt-2">${nbRealisees} réalisées sur ${totalPrevues} attendues, ${nbPlanifiees} restantes, ${nbRetard} en retard</div>
-                        ${nbHorsEffectif ? `<div class="small text-muted fst-italic">\u2139\uFE0F ${nbHorsEffectif} visite${nbHorsEffectif > 1 ? 's' : ''} exclue${nbHorsEffectif > 1 ? 's' : ''} de l'objectif (mois hors effectif : arrivées / départs)</div>` : ''}
+                        ${nbHorsEffectif ? `<div class="small text-muted fst-italic">\u2139\uFE0F ${nbHorsEffectif} visite${nbHorsEffectif > 1 ? 's' : ''} hors objectif (arrivées, départs, absences, hors périmètre)</div>` : ''}
                     </div>
                 </div>
             </div>
@@ -6039,7 +6362,7 @@ const PlanningPage = {
             <span class="legend-box cell-planifie-bg ms-2"></span>Planifié
             <span class="legend-box cell-retard-bg ms-2"></span>En retard
             <span class="legend-box cell-annulee-bg ms-2"></span>Annulé
-            <span class="legend-box cell-hors-bg ms-2"></span>Hors effectif
+            <span class="legend-box cell-hors-bg ms-2"></span>Hors effectif / en attente
         </div>
 
         ${filtered.length === 0
@@ -6101,12 +6424,20 @@ const PlanningPage = {
                 if (horsEffectif) {
                     // Cellule neutralisee : une visite residuelle reste cliquable pour etre annulee/supprimee
                     const v = vList[0];
+                    const motif = Effectif.motifMois(cond, this._annee, m);
+                    const abs = motif === 'absence' ? Effectif.absenceLe(cond, `${this._annee}-${String(m).padStart(2, '0')}-15`) : null;
+                    const libelle = abs ? 'en attente' : (motif === 'non-applicable' ? 'non applicable' : 'hors effectif');
+                    const infobulle = abs
+                        ? `${abs.motif || 'Absence'} : VMC en attente`
+                        : (motif === 'non-applicable'
+                            ? `${cond.motifNA || 'Non applicable'} : hors objectif VMC`
+                            : 'Hors effectif : aucune VMC attendue');
                     cellClass = v ? 'planning-cell cell-hors-visite' : 'cell-hors';
                     cellContent = v
-                        ? `<div class="cell-prevu-main text-decoration-line-through">${this._fmtShort(v.datePrevue)}</div><div class="small">hors effectif</div>`
-                        : `<span class="small">--</span>`;
+                        ? `<div class="cell-prevu-main text-decoration-line-through">${this._fmtShort(v.datePrevue)}</div><div class="small">${libelle}</div>`
+                        : `<span class="small">${abs ? '\u23F8' : (motif === 'non-applicable' ? 'n/a' : '--')}</span>`;
                     statut = v ? (v.annulee ? 'annulee' : v.statut) : 'hors';
-                    row += `<td class="${cellClass}${isCurrent ? ' current-month' : ''}" data-cond="${cond.id}" data-month="${m}" data-visite="${v ? v.id : ''}" data-statut="${statut}" title="Hors effectif : aucune VMC attendue">${cellContent}</td>`;
+                    row += `<td class="${cellClass}${isCurrent ? ' current-month' : ''}" data-cond="${cond.id}" data-month="${m}" data-visite="${v ? v.id : ''}" data-statut="${statut}" title="${this._escAttr(infobulle)}">${cellContent}</td>`;
                     continue;
                 }
                 if (vList.length) {
@@ -6767,7 +7098,7 @@ const VmcFormPage = {
                             <label class="form-label">Observateur *</label>
                             <select class="form-select" id="vmc-conducteur" required>
                                 <option value="" ${!selectedConducteurId ? 'selected' : ''}>-- Sélectionner --</option>
-                                ${conducteurs.filter(c => Effectif.estActif(c) || Number(c.id) === Number(selectedConducteurId)).map(c => `<option value="${c.id}" ${Number(c.id) === Number(selectedConducteurId) && selectedConducteurId ? 'selected' : ''}>${this._escHtml(c.nom)} (${this._escHtml(c.agence)})${Effectif.estActif(c) ? '' : ' - parti'}</option>`).join('')}
+                                ${conducteurs.filter(c => Effectif.estActif(c) || Number(c.id) === Number(selectedConducteurId)).map(c => `<option value="${c.id}" ${Number(c.id) === Number(selectedConducteurId) && selectedConducteurId ? 'selected' : ''}>${this._escHtml(c.nom)} (${this._escHtml(c.agence)})${Effectif.estActif(c) ? (Effectif.estDisponible(c) ? '' : (Effectif.estConcerne(c) ? ' - en absence' : ' - hors périmètre')) : ' - parti'}</option>`).join('')}
                             </select>
                             <div id="vmc-conducteur-alertes" class="small mt-1"></div>
                         </div>
@@ -8462,7 +8793,8 @@ const ImportExport = {
             'nom':         c.nom || '',
             'agence':      c.agence || '',
             'date_entree': c.dateEntree || '',
-            'date_sortie': c.dateSortie || ''
+            'date_sortie': c.dateSortie || '',
+            'absences':    (c.absences || []).map(a => `${a.motif || 'Absence'} du ${a.debut}${a.fin ? ' au ' + a.fin : ' (en cours)'}`).join(' ; ')
         }));
         XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(condData), 'Observateurs');
 
