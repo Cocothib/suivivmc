@@ -279,6 +279,7 @@ body {
 .cell-planifie-bg { background-color: #fff3cd; }
 .cell-retard-bg { background-color: #f8d7da; }
 .cell-annulee-bg { background-color: #e9ecef; }
+.cell-hors-bg { background-color: #f1f3f5; background-image: repeating-linear-gradient(45deg, transparent, transparent 3px, #dee2e6 3px, #dee2e6 5px); }
 
 /* Visite annulee */
 .cell-annulee {
@@ -289,6 +290,28 @@ body {
 .cell-annulee * {
     text-decoration: line-through;
     opacity: 0.5;
+}
+
+/* Mois hors effectif (avant arrivee / apres depart) */
+.cell-hors {
+    background-color: #f1f3f5 !important;
+    background-image: repeating-linear-gradient(45deg, transparent, transparent 3px, #dee2e6 3px, #dee2e6 5px);
+    color: #adb5bd !important;
+    cursor: not-allowed !important;
+}
+
+.cell-hors:hover {
+    box-shadow: none !important;
+}
+
+.cell-hors .cell-add {
+    display: none;
+}
+
+.cell-hors-visite {
+    background-color: #f1f3f5 !important;
+    background-image: repeating-linear-gradient(45deg, transparent, transparent 3px, #dee2e6 3px, #dee2e6 5px);
+    color: #adb5bd !important;
 }
 
 /* ---- Grille de contrôle ---- */
@@ -2377,6 +2400,89 @@ const DB = {
     },
     setConfig(key, value) {
         return db.config.put({ id: key, value }).then(r => { DataSync.markDirty(); return r; });
+    }
+};
+
+</script>
+
+<!-- js\effectif.js -->
+<script>
+/* =============================================================
+   effectif.js - Periode de presence des observateurs
+   Un observateur peut arriver ou quitter l'entreprise en cours
+   d'annee : les mois hors presence ne doivent compter ni dans
+   l'objectif (denominateur du taux) ni dans les retards.
+   Champs portes par l'observateur : dateEntree / dateSortie (YYYY-MM-DD)
+   ============================================================= */
+const Effectif = {
+    /** Observateur present a la date de reference (par defaut aujourd'hui) */
+    estActif(cond, dateRef = null) {
+        if (!cond) return false;
+        const ref = dateRef || new Date().toISOString().slice(0, 10);
+        if (cond.dateEntree && cond.dateEntree > ref) return false;
+        if (cond.dateSortie && cond.dateSortie < ref) return false;
+        return true;
+    },
+
+    /** Present a la date donnee (YYYY-MM-DD) */
+    presentLe(cond, dateStr) {
+        if (!cond || !dateStr) return true;
+        if (cond.dateEntree && dateStr < cond.dateEntree) return false;
+        if (cond.dateSortie && dateStr > cond.dateSortie) return false;
+        return true;
+    },
+
+    /** Present au moins un jour sur la periode [debut, fin] */
+    presentSurPeriode(cond, debut, fin) {
+        if (!cond) return true;
+        if (cond.dateEntree && cond.dateEntree > fin) return false;
+        if (cond.dateSortie && cond.dateSortie < debut) return false;
+        return true;
+    },
+
+    /** Le mois doit-il faire l'objet d'une VMC pour cet observateur ? */
+    moisDu(cond, annee, mois) {
+        const mm = String(mois).padStart(2, '0');
+        const dateRef = `${annee}-${mm}-15`;
+        return this.presentLe(cond, dateRef);
+    },
+
+    /**
+     * Visite comptabilisee dans l'objectif annuel.
+     * Une visite deja realisee compte toujours (sinon le taux depasserait 100%).
+     */
+    estDue(cond, v) {
+        if (!v || v.annulee) return false;
+        if (v.statut === 'realise') return true;
+        return this.presentLe(cond, v.datePrevue || `${v.annee}-${String(v.mois).padStart(2, '0')}-15`);
+    },
+
+    /** Nombre de VMC attendues sur l'annee (prorata arrivee / depart) */
+    moisDusAnnee(cond, annee) {
+        let n = 0;
+        for (let m = 1; m <= 12; m++) if (this.moisDu(cond, annee, m)) n++;
+        return n;
+    },
+
+    /** Etat de l'observateur pour l'UI : {code, label, cls} */
+    etat(cond) {
+        const today = new Date().toISOString().slice(0, 10);
+        if (cond.dateSortie && cond.dateSortie < today) {
+            return { code: 'parti', label: `Parti le ${this.fmt(cond.dateSortie)}`, cls: 'bg-secondary' };
+        }
+        if (cond.dateEntree && cond.dateEntree > today) {
+            return { code: 'a-venir', label: `Arrivee le ${this.fmt(cond.dateEntree)}`, cls: 'bg-info text-dark' };
+        }
+        if (cond.dateSortie) {
+            return { code: 'sortant', label: `Depart le ${this.fmt(cond.dateSortie)}`, cls: 'bg-warning text-dark' };
+        }
+        return { code: 'actif', label: 'Actif', cls: 'bg-success' };
+    },
+
+    fmt(iso) {
+        if (!iso) return '-';
+        const [y, m, d] = iso.split('-');
+        return `${d}/${m}/${y}`;
     }
 };
 
@@ -4653,14 +4759,16 @@ const ConfigPage = {
                         <h6 class="mb-0">Observateurs</h6>
                         <button class="btn btn-primary btn-sm" id="btn-add-cond">\u2795 Ajouter</button>
                     </div>
+                    <div id="cond-orphelins"></div>
                     <div class="table-responsive">
-                        <table class="table table-sm table-hover" id="table-conducteurs">
+                        <table class="table table-sm table-hover align-middle" id="table-conducteurs">
                             <thead><tr>
-                                <th>ID</th><th>Nom</th><th>Email</th><th>Agence</th><th></th>
+                                <th>ID</th><th>Nom</th><th>Email</th><th>Agence</th><th>Présence</th><th></th>
                             </tr></thead>
                             <tbody></tbody>
                         </table>
                     </div>
+                    <div class="form-text mt-2">Une date de sortie neutralise les mois suivants : ils ne comptent plus dans l'objectif annuel ni dans les retards. L'historique des VMC réalisées est conservé.</div>
                 </div></div>
             </div>
 
@@ -4976,19 +5084,28 @@ const ConfigPage = {
 
     /* --- Observateurs --- */
     _renderConducteurs(conducteurs) {
+        const annee = new Date().getFullYear();
         const tbody = document.querySelector('#table-conducteurs tbody');
-        tbody.innerHTML = conducteurs.map(c => `
-            <tr>
+        tbody.innerHTML = conducteurs.map(c => {
+            const etat = Effectif.etat(c);
+            const nbDus = Effectif.moisDusAnnee(c, annee);
+            return `
+            <tr class="${etat.code === 'parti' ? 'text-muted' : ''}">
                 <td>${c.id}</td>
                 <td>${this._escHtml(c.nom || '')}</td>
                 <td>${c.email ? `<span class="text-muted small">${this._escHtml(c.email)}</span>` : '<span class="text-muted small fst-italic">non renseigné</span>'}</td>
                 <td>${this._escHtml(c.agence || '')}</td>
                 <td>
+                    <span class="badge ${etat.cls}">${this._escHtml(etat.label)}</span>
+                    ${nbDus < 12 ? `<div class="small text-muted">${nbDus} VMC attendue${nbDus > 1 ? 's' : ''} en ${annee}</div>` : ''}
+                </td>
+                <td class="text-nowrap">
                     <button class="btn btn-sm btn-outline-primary btn-edit-cond" data-id="${c.id}">\u270E</button>
                     <button class="btn btn-sm btn-outline-danger btn-del-cond" data-id="${c.id}">\u{1F5D1}</button>
                 </td>
-            </tr>`).join('');
+            </tr>`; }).join('');
 
+        this._renderOrphelins(conducteurs);
         document.getElementById('btn-add-cond').onclick = () => this._condModal();
         tbody.querySelectorAll('.btn-edit-cond').forEach(b => {
             b.onclick = async () => {
@@ -4998,7 +5115,10 @@ const ConfigPage = {
         });
         tbody.querySelectorAll('.btn-del-cond').forEach(b => {
             b.onclick = async () => {
-                if (confirm('Supprimer cet observateur ?')) {
+                const msg = "Supprimer definitivement cet observateur ?\n\n"
+                    + "Pour un depart de l'entreprise, preferez la date de sortie (bouton Modifier) :\n"
+                    + "l'historique des VMC est conserve et les mois suivants sortent de l'objectif.";
+                if (confirm(msg)) {
                     await DB.deleteConducteur(Number(b.dataset.id));
                     showToast('Observateur supprimé', 'warning');
                     ConfigPage.render(document.getElementById('app-content'));
@@ -5007,11 +5127,51 @@ const ConfigPage = {
         });
     },
 
-    async _condModal(cond = null) {
-        const isEdit = !!cond;
+    /* --- Observateurs supprimes dont les donnees subsistent (visites / VMC) --- */
+    async _renderOrphelins(conducteurs) {
+        const zone = document.getElementById('cond-orphelins');
+        if (!zone) return;
+        const connus = new Set(conducteurs.map(c => c.id));
+        const visites = await DB.getVisites();
+        const vmcs    = await DB.getVmcs();
+        const orphelins = {};
+        const compter = (cid, nom, cle) => {
+            if (cid == null || connus.has(cid)) return;
+            if (!orphelins[cid]) orphelins[cid] = { id: cid, nom: nom || '', visites: 0, vmcs: 0 };
+            if (nom && !orphelins[cid].nom) orphelins[cid].nom = nom;
+            orphelins[cid][cle]++;
+        };
+        visites.forEach(v => compter(v.conducteurId, v.conducteurNom, 'visites'));
+        vmcs.forEach(v => compter(v.conducteurId, v.conducteurNom, 'vmcs'));
+
+        const liste = Object.values(orphelins);
+        if (!liste.length) { zone.innerHTML = ''; return; }
+
+        zone.innerHTML = `
+        <div class="alert alert-warning py-2">
+            <div class="fw-bold mb-1">\u26A0\uFE0F Observateur${liste.length > 1 ? 's' : ''} supprimé${liste.length > 1 ? 's' : ''} avec des données rattachées</div>
+            <div class="small mb-2">Leurs visites et VMC existent toujours mais ne sont plus reliées à personne. La restauration recrée la fiche avec son ID d'origine.</div>
+            ${liste.map(o => `
+                <div class="d-flex justify-content-between align-items-center border-top pt-1 mt-1">
+                    <span class="small">ID ${o.id} \u2014 <strong>${this._escHtml(o.nom || 'nom inconnu')}</strong> : ${o.visites} visite(s), ${o.vmcs} VMC</span>
+                    <button class="btn btn-sm btn-outline-success btn-restore-cond" data-id="${o.id}" data-nom="${this._escAttr(o.nom || '')}">\u21BA Restaurer</button>
+                </div>`).join('')}
+        </div>`;
+
+        zone.querySelectorAll('.btn-restore-cond').forEach(b => {
+            b.onclick = () => this._condModal(
+                { id: Number(b.dataset.id), nom: b.dataset.nom, email: '', agence: '' },
+                { restore: true }
+            );
+        });
+    },
+
+    async _condModal(cond = null, opts = {}) {
+        const isRestore = !!opts.restore;
+        const isEdit = !!cond && !isRestore;
         // Auto-generate next ID for new observateurs
         let nextId = '';
-        if (!isEdit) {
+        if (!cond) {
             const allConducteurs = await DB.getConducteurs();
             const maxId = allConducteurs.reduce((max, c) => Math.max(max, c.id || 0), 0);
             nextId = maxId + 1;
@@ -5021,15 +5181,31 @@ const ConfigPage = {
         document.body.insertAdjacentHTML('beforeend', `
         <div class="modal fade" id="${id}" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">${isEdit ? 'Modifier' : 'Nouvel'} observateur</h5>
+                <h5 class="modal-title">${isEdit ? 'Modifier' : (isRestore ? 'Restaurer un' : 'Nouvel')} observateur</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <form id="form-cond">
             <div class="modal-body">
-                <div class="mb-2"><label class="form-label">ID</label><input type="number" class="form-control" id="cond-id" value="${isEdit ? cond.id : nextId}" readonly></div>
+                <div class="mb-2">
+                    <label class="form-label">ID</label>
+                    <input type="number" class="form-control" id="cond-id" value="${cond ? cond.id : nextId}" ${isEdit ? 'readonly' : ''}>
+                    ${isEdit ? '' : '<div class="form-text">Modifiable uniquement à la création. Pour réintégrer un observateur supprimé, ressaisir son ID d\'origine afin de récupérer ses visites et VMC.</div>'}
+                </div>
                 <div class="mb-2"><label class="form-label">Nom *</label><input type="text" class="form-control" id="cond-nom" value="${this._escAttr(cond?.nom || '')}" required></div>
                 <div class="mb-2"><label class="form-label">Email</label><input type="email" class="form-control" id="cond-email" value="${this._escAttr(cond?.email || '')}" placeholder="initialnom@agriwatt.fr"></div>
                 <div class="mb-2"><label class="form-label">Agence</label><input type="text" class="form-control" id="cond-agence" value="${this._escAttr(cond?.agence || '')}"></div>
+                <hr class="my-3">
+                <div class="row g-2">
+                    <div class="col-6">
+                        <label class="form-label">Date d'entrée</label>
+                        <input type="date" class="form-control" id="cond-entree" value="${cond?.dateEntree || ''}">
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">Date de sortie</label>
+                        <input type="date" class="form-control" id="cond-sortie" value="${cond?.dateSortie || ''}">
+                    </div>
+                </div>
+                <div class="form-text">Laisser vide si l'observateur est présent toute l'année. Les mois situés hors de cette période sont retirés de l'objectif de VMC (indicateurs et planning).</div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler</button>
@@ -5050,12 +5226,25 @@ const ConfigPage = {
                 id:     Number(document.getElementById('cond-id').value),
                 nom:    document.getElementById('cond-nom').value.trim(),
                 email:  document.getElementById('cond-email').value.trim(),
-                agence: document.getElementById('cond-agence').value.trim()
+                agence: document.getElementById('cond-agence').value.trim(),
+                dateEntree: document.getElementById('cond-entree').value || null,
+                dateSortie: document.getElementById('cond-sortie').value || null
             };
             if (!data.nom || !data.id) return;
+            if (data.dateEntree && data.dateSortie && data.dateSortie < data.dateEntree) {
+                showToast('La date de sortie doit être postérieure à la date d\'entrée', 'danger');
+                return;
+            }
+            if (!isEdit) {
+                const existant = await DB.getConducteur(data.id);
+                if (existant) {
+                    showToast(`L'ID ${data.id} est déjà utilisé par ${existant.nom}`, 'danger');
+                    return;
+                }
+            }
             await DB.putConducteur(data);
             modal.hide();
-            showToast(isEdit ? 'Observateur modifié' : 'Observateur ajouté');
+            showToast(isEdit ? 'Observateur modifié' : (isRestore ? 'Observateur restauré' : 'Observateur ajouté'));
             ConfigPage.render(document.getElementById('app-content'));
         };
     },
@@ -5444,12 +5633,21 @@ const DashboardPage = {
         const vmcs        = await DB.getVmcs();
         const actions     = await DB.getActions();
 
+        // Effectif : on ne compte que les mois ou l'observateur fait partie des effectifs
+        const condMap = Object.fromEntries(conducteurs.map(c => [c.id, c]));
+        const conducteursActifs = conducteurs.filter(c => Effectif.estActif(c));
+        const nbPartis = conducteurs.length - conducteursActifs.length;
+
+        // Visites dues = objectif reel (hors annulees, hors mois avant arrivee / apres depart)
+        const visitesDues = visites.filter(v => Effectif.estDue(condMap[v.conducteurId], v));
+        const nbHorsEffectif = visites.filter(v => !v.annulee).length - visitesDues.length;
+
         // Compter les VMC réelles de l'année (source de vérité)
         const vmcsAnnee = vmcs.filter(v => v.date && v.date.startsWith(String(annee)));
         const nbRealisees  = vmcsAnnee.length;
-        const nbPlanifiees = visites.filter(v => v.statut === 'planifie' && !v.annulee).length;
+        const nbPlanifiees = visitesDues.filter(v => v.statut === 'planifie').length;
         const today = now.toISOString().slice(0, 10);
-        const nbRetard = visites.filter(v => v.statut === 'planifie' && !v.annulee && v.datePrevue < today).length;
+        const nbRetard = visitesDues.filter(v => v.statut === 'planifie' && v.datePrevue < today).length;
         const actionsOuvertes = actions.filter(a => a.statut === 'A faire' || a.statut === 'En cours').length;
 
         // --- Suivi des actions correctives ---
@@ -5463,7 +5661,7 @@ const DashboardPage = {
         const pctEnCours   = actTotal > 0 ? (actEnCours / actTotal) * 100 : 0;
         const pctSoldees   = actTotal > 0 ? (actSoldees / actTotal) * 100 : 0;
 
-        const totalPrevues = visites.filter(v => !v.annulee).length;
+        const totalPrevues = visitesDues.length;
         const tauxConf = totalPrevues > 0 ? Math.round((nbRealisees / totalPrevues) * 100) : 0;
 
         container.innerHTML = `
@@ -5475,8 +5673,8 @@ const DashboardPage = {
                 <div class="card kpi-card border-top border-primary" id="kpi-conducteurs" role="button" style="cursor:pointer">
                     <div class="card-body text-center py-3">
                         <div class="kpi-icon text-primary">\u{1F465}</div>
-                        <div class="kpi-value">${conducteurs.length}</div>
-                        <div class="kpi-label">Observateurs</div>
+                        <div class="kpi-value">${conducteursActifs.length}${nbPartis ? `<small class="text-muted fs-6">/${conducteurs.length}</small>` : ''}</div>
+                        <div class="kpi-label">Observateurs${nbPartis ? ' actifs' : ''}</div>
                     </div>
                 </div>
             </div>
@@ -5521,7 +5719,8 @@ const DashboardPage = {
                         <div class="progress" style="height:20px">
                             <div class="progress-bar bg-primary" style="width:${Math.min(100, tauxConf)}%">${tauxConf}%</div>
                         </div>
-                        <div class="small text-muted mt-2">${nbRealisees} réalisées sur ${totalPrevues} prévues, ${nbPlanifiees} restantes, ${nbRetard} en retard</div>
+                        <div class="small text-muted mt-2">${nbRealisees} réalisées sur ${totalPrevues} attendues, ${nbPlanifiees} restantes, ${nbRetard} en retard</div>
+                        ${nbHorsEffectif ? `<div class="small text-muted fst-italic">\u2139\uFE0F ${nbHorsEffectif} visite${nbHorsEffectif > 1 ? 's' : ''} exclue${nbHorsEffectif > 1 ? 's' : ''} de l'objectif (mois hors effectif : arrivées / départs)</div>` : ''}
                     </div>
                 </div>
             </div>
@@ -5600,8 +5799,8 @@ const DashboardPage = {
             </div>
         </div>`;
 
-        this._renderChart(visites, vmcsAnnee, annee);
-        this._renderProchaines(visites, conducteurs);
+        this._renderChart(visitesDues, vmcsAnnee, annee);
+        this._renderProchaines(visitesDues, conducteurs);
         this._renderActionsRecentes(actions, vmcs, conducteurs);
         this._bindKpiCards();
         this._renderNcActions();
@@ -5656,6 +5855,7 @@ const DashboardPage = {
         });
     },
 
+    // `visites` = visites dues uniquement (cf. render) : mois hors effectif deja exclus
     _renderProchaines(visites, conducteurs) {
         const today = new Date().toISOString().slice(0, 10);
         const condMap = Object.fromEntries(conducteurs.map(c => [c.id, c]));
@@ -5839,6 +6039,7 @@ const PlanningPage = {
             <span class="legend-box cell-planifie-bg ms-2"></span>Planifié
             <span class="legend-box cell-retard-bg ms-2"></span>En retard
             <span class="legend-box cell-annulee-bg ms-2"></span>Annulé
+            <span class="legend-box cell-hors-bg ms-2"></span>Hors effectif
         </div>
 
         ${filtered.length === 0
@@ -5878,16 +6079,36 @@ const PlanningPage = {
         });
 
         conducteurs.forEach(cond => {
-            let row = `<td class="sticky-col fw-bold">${this._escHtml(cond.nom)}</td>`;
+            const etat = Effectif.etat(cond);
+            const nbDus = Effectif.moisDusAnnee(cond, this._annee);
+            const badgeCond = etat.code === 'actif'
+                ? ''
+                : ` <span class="badge ${etat.cls} fw-normal" style="font-size:.65rem" title="${nbDus} VMC attendue(s) en ${this._annee}">${this._escHtml(etat.label)}</span>`;
+            let row = `<td class="sticky-col fw-bold">${this._escHtml(cond.nom)}${badgeCond}</td>`;
             row += `<td class="sticky-col-2 text-muted small">${this._escHtml(cond.agence || '')}</td>`;
 
             for (let m = 1; m <= 12; m++) {
                 const vList = idx[cond.id + '-' + m] || [];
                 const isCurrent = (m - 1) === currentMonth;
+                // Mois hors effectif (avant arrivee / apres depart) : aucune VMC attendue.
+                // Une visite deja realisee reste affichee normalement.
+                const horsEffectif = !Effectif.moisDu(cond, this._annee, m)
+                    && !(vList.length && vList[0].statut === 'realise');
                 let cellClass = 'planning-cell cell-empty';
                 let cellContent = `<span class="cell-add">+</span>`;
 
                 let statut = '';
+                if (horsEffectif) {
+                    // Cellule neutralisee : une visite residuelle reste cliquable pour etre annulee/supprimee
+                    const v = vList[0];
+                    cellClass = v ? 'planning-cell cell-hors-visite' : 'cell-hors';
+                    cellContent = v
+                        ? `<div class="cell-prevu-main text-decoration-line-through">${this._fmtShort(v.datePrevue)}</div><div class="small">hors effectif</div>`
+                        : `<span class="small">--</span>`;
+                    statut = v ? (v.annulee ? 'annulee' : v.statut) : 'hors';
+                    row += `<td class="${cellClass}${isCurrent ? ' current-month' : ''}" data-cond="${cond.id}" data-month="${m}" data-visite="${v ? v.id : ''}" data-statut="${statut}" title="Hors effectif : aucune VMC attendue">${cellContent}</td>`;
+                    continue;
+                }
                 if (vList.length) {
                     const v = vList[0];
                     statut = v.annulee ? 'annulee' : v.statut;
@@ -6049,7 +6270,10 @@ const PlanningPage = {
         const visites = await DB.getVisites({ annee: this._annee });
         const entreprise = await DB.getConfig('entreprise') || {};
         const emailTpl = await DB.getConfig('email_template') || {};
-        const planifiées = visites.filter(v => v.statut === 'planifie' && !v.annulee);
+        // On n'invite pas sur les mois hors effectif (avant arrivee / apres depart)
+        const condMapIcs = Object.fromEntries(conducteurs.map(c => [c.id, c]));
+        const planifiées = visites.filter(v => v.statut === 'planifie' && !v.annulee
+            && Effectif.estDue(condMapIcs[v.conducteurId], v));
 
         // Grouper par observateur
         const parObs = {};
@@ -6543,7 +6767,7 @@ const VmcFormPage = {
                             <label class="form-label">Observateur *</label>
                             <select class="form-select" id="vmc-conducteur" required>
                                 <option value="" ${!selectedConducteurId ? 'selected' : ''}>-- Sélectionner --</option>
-                                ${conducteurs.map(c => `<option value="${c.id}" ${Number(c.id) === Number(selectedConducteurId) && selectedConducteurId ? 'selected' : ''}>${this._escHtml(c.nom)} (${this._escHtml(c.agence)})</option>`).join('')}
+                                ${conducteurs.filter(c => Effectif.estActif(c) || Number(c.id) === Number(selectedConducteurId)).map(c => `<option value="${c.id}" ${Number(c.id) === Number(selectedConducteurId) && selectedConducteurId ? 'selected' : ''}>${this._escHtml(c.nom)} (${this._escHtml(c.agence)})${Effectif.estActif(c) ? '' : ' - parti'}</option>`).join('')}
                             </select>
                             <div id="vmc-conducteur-alertes" class="small mt-1"></div>
                         </div>
@@ -8234,9 +8458,11 @@ const ImportExport = {
 
         // Feuille Conducteurs
         const condData = conducteurs.map(c => ({
-            'id':     c.id,
-            'nom':    c.nom || '',
-            'agence': c.agence || ''
+            'id':          c.id,
+            'nom':         c.nom || '',
+            'agence':      c.agence || '',
+            'date_entree': c.dateEntree || '',
+            'date_sortie': c.dateSortie || ''
         }));
         XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(condData), 'Observateurs');
 
