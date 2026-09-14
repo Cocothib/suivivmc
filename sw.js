@@ -6,8 +6,8 @@
    - API Graph Microsoft : network-only (pas de cache API)
    ============================================================= */
 
-const CACHE_NAME = 'vmc-pwa-v46';
-const APP_SHELL = ['./index.html', './manifest.json'];
+const CACHE_NAME = 'vmc-pwa-v47';
+const APP_SHELL = ['./index.html', './manifest.json', './schemas.html', './assets/logo-gr-bleu.png'];
 
 /* --- Installation : pre-cache du shell --- */
 self.addEventListener('install', (event) => {

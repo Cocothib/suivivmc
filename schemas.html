@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Suivi VMC en schémas</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Questrial&display=swap">
+<style>
+/* Charte Générations Renouvelables : bleu marine, teal, jaune, orange, noir, gris clair */
+:root {
+  --bleu: #292F6C; --teal: #007F85; --jaune: #FFCE00; --orange: #EC820B; --noir: #121212; --gris: #F7F7F7;
+  --bg: #F7F7F7; --panel: #ffffff; --ink: #121212; --muted: #5a5f6e; --line: #d6d8e0;
+  --bleu-soft: #e4e6f2; --teal-soft: #d9eeef; --orange-soft: #fbe6d0; --jaune-soft: #fff5c2;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14162a; --panel: #1c1f36; --ink: #eceef5; --muted: #a3a8bd; --line: #353a5a;
+    --bleu: #9aa3ff; --teal: #4fc3c8; --orange: #f5a04a; --jaune: #ffd84d;
+    --bleu-soft: #262b52; --teal-soft: #163a3d; --orange-soft: #43301a; --jaune-soft: #3d3712;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14162a; --panel: #1c1f36; --ink: #eceef5; --muted: #a3a8bd; --line: #353a5a;
+  --bleu: #9aa3ff; --teal: #4fc3c8; --orange: #f5a04a; --jaune: #ffd84d;
+  --bleu-soft: #262b52; --teal-soft: #163a3d; --orange-soft: #43301a; --jaune-soft: #3d3712;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: "Century Gothic", "URW Gothic", "Questrial", "Futura", "Avenir", sans-serif; font-size: 16px; line-height: 1.5; }
+main { max-width: 1120px; margin: 0 auto; padding: 28px 24px 64px; }
+header.top { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }
+header.top img { height: 64px; width: auto; }
+h1, h2, h3 { text-wrap: balance; margin: 0; color: var(--bleu); font-weight: 700; }
+h1 { font-size: 2.2rem; line-height: 1.1; }
+h2 { font-size: 1.4rem; margin-top: 48px; padding-top: 12px; border-top: 3px solid var(--bleu); }
+.eyebrow { text-transform: uppercase; letter-spacing: .08em; font-size: .78rem; color: var(--orange); font-weight: 700; }
+p { max-width: 70ch; margin: 12px 0; }
+p.lead { font-size: 1.08rem; color: var(--muted); max-width: 74ch; }
+figure { margin: 20px 0 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; overflow-x: auto; }
+figure svg { display: block; width: 100%; height: auto; min-width: 680px; color: var(--ink); }
+figcaption { font-size: .9rem; color: var(--muted); margin-top: 10px; max-width: 95ch; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 20px; font-size: .86rem; color: var(--muted); margin-top: 8px; }
+.legend span::before { content: ""; display: inline-block; width: 22px; height: 0; border-top: 2.5px solid var(--ink); vertical-align: middle; margin-right: 8px; }
+.legend .l-bleu::before { border-color: var(--bleu); }
+.legend .l-teal::before { border-color: var(--teal); border-top-style: dashed; }
+.legend .l-orange::before { border-color: var(--orange); }
+.steps { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 10px; }
+.steps li { display: grid; grid-template-columns: 34px 1fr; gap: 10px; align-items: start; }
+.steps b.n { font-size: 1.15rem; color: var(--orange); font-weight: 700; padding-top: 1px; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+@media (max-width: 820px) { .two { grid-template-columns: 1fr; } }
+table { border-collapse: collapse; width: 100%; font-size: .9rem; margin-top: 16px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { text-transform: uppercase; letter-spacing: .06em; font-size: .74rem; color: var(--bleu); }
+td.k { font-weight: 700; white-space: nowrap; }
+tr:nth-child(even) td { background: var(--gris); }
+:root[data-theme="dark"] tr:nth-child(even) td { background: transparent; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) tr:nth-child(even) td { background: transparent; } }
+.tag { display: inline-block; font-size: .72rem; padding: 1px 7px; border-radius: 3px; font-weight: 700; letter-spacing: .02em; white-space: nowrap; }
+.tag.bleu { background: var(--bleu-soft); color: var(--bleu); }
+.tag.teal { background: var(--teal-soft); color: var(--teal); }
+.tag.orange { background: var(--orange-soft); color: var(--orange); }
+code { font-family: Consolas, "Courier New", monospace; font-size: .86em; background: var(--bleu-soft); color: var(--bleu); padding: 0 4px; border-radius: 3px; }
+.note { font-size: .9rem; color: var(--muted); }
+.wrap { overflow-x: auto; }
+/* ---- Écrans étroits : versions empilées des schémas ---- */
+.m-only { display: none; }
+@media (max-width: 900px) {
+  main { padding: 18px 14px 48px; }
+  h1 { font-size: 1.7rem; }
+  h2 { margin-top: 36px; font-size: 1.25rem; }
+  header.top img { height: 48px; }
+  figure { padding: 12px; overflow: visible; }
+  figure svg { display: none; }
+  .m-only { display: block; }
+  .m-flow { display: grid; gap: 8px; }
+  .m-head { text-transform: uppercase; letter-spacing: .06em; font-size: .76rem; font-weight: 700; margin-top: 10px; color: var(--bleu); }
+  .m-head.teal { color: var(--teal); } .m-head.orange { color: var(--orange); }
+  .m-box { border: 1px solid var(--line); border-left: 4px solid var(--bleu); border-radius: 5px; padding: 7px 10px; background: var(--bg); font-size: .9rem; line-height: 1.35; }
+  .m-box.teal { border-left-color: var(--teal); border-left-style: dashed; }
+  .m-box.orange { border-left-color: var(--orange); }
+  .m-box.jaune { border-left-color: var(--jaune); }
+  .m-box b { display: block; font-weight: 700; }
+  .m-box span { display: block; color: var(--muted); font-size: .84rem; }
+  .m-box ul { margin: 6px 0 0; padding-left: 16px; font-size: .84rem; }
+  .m-link { font-size: .84rem; color: var(--muted); padding: 2px 0 2px 10px; border-left: 2px solid var(--bleu); margin-left: 12px; }
+  .m-link.teal { border-left-color: var(--teal); border-left-style: dashed; } .m-link.orange { border-left-color: var(--orange); }
+  table, tbody, tr, td { display: block; }
+  thead { display: none; }
+  tr { border: 1px solid var(--line); border-radius: 6px; background: var(--panel); padding: 8px 10px 6px; margin-bottom: 10px; }
+  tr:nth-child(even) td { background: transparent; }
+  td { border: 0; padding: 2px 0 6px; }
+  td.k { white-space: normal; font-size: 1.05rem; padding-bottom: 2px; color: var(--bleu); }
+  td:not(.k)::before { display: block; font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  td:nth-child(2)::before { content: "Contenu"; }
+  td:nth-child(3)::before { content: "Qui écrit"; }
+  td:nth-child(4)::before { content: "Quand"; }
+}
+</style>
+</head>
+<body>
+
+<main>
+  <header class="top">
+    <div>
+      <div class="eyebrow">Générations Renouvelables · Agriwatt · QHSE</div>
+      <h1>Suivi VMC en schémas</h1>
+    </div>
+    <img src="assets/logo-gr-bleu.png" alt="Générations Renouvelables – Enersolys – AgriWATT">
+  </header>
+  <p class="lead">Une seule page web installable, une copie complète des données dans chaque appareil, et un fichier partagé sur SharePoint qui fait autorité. Voici comment les pièces s'emboîtent : où vivent les données, le parcours d'une visite, la synchronisation entre appareils et les échanges avec les autres outils QHSE.</p>
+
+  <!-- ============================================================ 1 -->
+  <h2>1. Où vit quoi</h2>
+  <p>Le code de l'application est servi par l'hébergement OVH, mais <b>aucune donnée n'y transite</b>. Chaque appareil garde une copie complète dans son navigateur (IndexedDB) et dialogue directement avec SharePoint via Microsoft Graph, avec la session Microsoft 365 de l'utilisateur.</p>
+  <figure class="d">
+    <svg viewBox="0 0 1120 560" role="img" aria-label="Architecture : appareils avec l'application installée et une copie locale des données, Microsoft Graph au milieu, bibliothèque SharePoint QHSE à droite, hébergement OVH en bas.">
+      <defs>
+        <marker id="m-bleu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--bleu)"/></marker>
+        <marker id="m-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--teal)"/></marker>
+        <marker id="m-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--orange)"/></marker>
+      </defs>
+      <g font-family="Century Gothic, URW Gothic, Questrial, sans-serif" font-size="11" fill="currentColor">
+
+        <!-- Appareils -->
+        <text x="20" y="28" font-size="14" font-weight="700" letter-spacing=".06em" style="fill:var(--bleu)">SUR CHAQUE APPAREIL (PC, téléphone, tablette)</text>
+        <rect x="20" y="42" width="360" height="330" rx="8" stroke-width="1.5" style="fill:var(--bleu-soft);stroke:var(--bleu)"/>
+        <text x="200" y="68" text-anchor="middle" font-size="16" font-weight="700">Navigateur ou PWA installée</text>
+
+        <rect x="36" y="84" width="328" height="60" rx="5" stroke-width="1.2" style="fill:var(--panel);stroke:var(--bleu)"/>
+        <text x="48" y="105" font-weight="700">index.html + sw.js (v46)</text>
+        <text x="48" y="123" font-size="11" style="fill:var(--muted)">librairies embarquées · fonctionne hors ligne</text>
+
+        <rect x="36" y="156" width="328" height="76" rx="5" stroke-width="1.2" style="fill:var(--panel);stroke:var(--bleu)"/>
+        <text x="48" y="177" font-weight="700">IndexedDB : copie locale complète</text>
+        <text x="48" y="195" font-size="11" style="fill:var(--muted)">conducteurs · visites · vmcs · actions · config</text>
+        <text x="48" y="213" font-size="11" style="fill:var(--muted)">+ instantané de la dernière synchro, modifs en attente</text>
+
+        <rect x="36" y="244" width="328" height="60" rx="5" stroke-width="1.2" style="fill:var(--panel);stroke:var(--bleu)"/>
+        <text x="48" y="265" font-weight="700">MSAL : session Microsoft 365</text>
+        <text x="48" y="283" font-size="11" style="fill:var(--muted)">compte Agriwatt, jeton renouvelé en silence</text>
+
+        <rect x="36" y="316" width="328" height="44" rx="5" stroke-width="1.2" stroke-dasharray="4 3" style="fill:var(--panel);stroke:var(--teal)"/>
+        <text x="48" y="336" font-weight="700" style="fill:var(--teal)">Cache photos + PDF / Excel / .ics générés</text>
+        <text x="48" y="352" font-size="11" style="fill:var(--muted)">produits dans le navigateur, sans serveur tiers</text>
+
+        <!-- Graph -->
+        <rect x="440" y="150" width="200" height="110" rx="8" stroke-width="1.5" style="fill:var(--teal-soft);stroke:var(--teal)"/>
+        <text x="540" y="178" text-anchor="middle" font-size="16" font-weight="700">Microsoft Graph</text>
+        <text x="540" y="198" text-anchor="middle" font-size="11" style="fill:var(--muted)">graph.microsoft.com</text>
+        <text x="540" y="220" text-anchor="middle" font-size="11">lecture / écriture de fichiers</text>
+        <text x="540" y="238" text-anchor="middle" font-size="11">verrou ETag : pas d'écrasement</text>
+
+        <path d="M380 205 H438" stroke-width="2" fill="none" marker-end="url(#m-teal)" marker-start="url(#m-teal)" style="stroke:var(--teal)"/>
+        <path d="M640 205 H698" stroke-width="2" fill="none" marker-end="url(#m-teal)" marker-start="url(#m-teal)" style="stroke:var(--teal)"/>
+        <text x="409" y="196" text-anchor="middle" font-size="11" style="fill:var(--teal)">HTTPS</text>
+        <text x="669" y="192" text-anchor="middle" font-size="10.5" style="fill:var(--teal)">jeton délégué</text>
+
+        <!-- SharePoint -->
+        <text x="700" y="28" font-size="14" font-weight="700" letter-spacing=".06em" style="fill:var(--bleu)">SHAREPOINT · SITE QHSE · BIBLIOTHÈQUE DOCUMENTS</text>
+        <rect x="700" y="42" width="400" height="330" rx="8" stroke-width="1.5" style="fill:var(--panel);stroke:var(--bleu)"/>
+        <text x="716" y="68" font-weight="700">Documents/SuiviVMC/</text>
+        <g font-size="11">
+          <rect x="730" y="80" width="354" height="40" rx="4" stroke-width="1.5" style="fill:var(--orange-soft);stroke:var(--orange)"/>
+          <text x="742" y="97" font-weight="700">vmc-data.json — le fichier qui fait autorité</text>
+          <text x="742" y="113" style="fill:var(--muted)">toutes les données + _meta (version, savedBy)</text>
+          <text x="742" y="143" font-weight="700">activity-log.json</text><text x="905" y="143" style="fill:var(--muted)">journal des actions</text>
+          <text x="742" y="165" font-weight="700">.presence/&lt;utilisateur&gt;.json</text><text x="975" y="165" style="fill:var(--muted)">qui est connecté</text>
+          <text x="742" y="187" font-weight="700">photos/&lt;vmcId&gt;/…</text><text x="905" y="187" style="fill:var(--muted)">photos hors JSON</text>
+          <text x="742" y="209" font-weight="700">PDF_envois/VMC_Nom_date.pdf</text><text x="975" y="209" style="fill:var(--muted)">→ Power Automate</text>
+        </g>
+        <text x="716" y="244" font-weight="700">Shared/referentiels.json</text>
+        <text x="716" y="262" font-size="11" style="fill:var(--muted)">référentiel commun aux apps QHSE : chantiers, personnel,</text>
+        <text x="716" y="278" font-size="11" style="fill:var(--muted)">habilitations, événements SuiviVMC → SuiviNC</text>
+        <text x="716" y="310" font-size="11" style="fill:var(--muted)">Versionné par SharePoint : corbeille et historique</text>
+        <text x="716" y="326" font-size="11" style="fill:var(--muted)">des versions permettent de revenir en arrière.</text>
+        <text x="716" y="354" font-size="11" font-weight="700" style="fill:var(--orange)">Ne jamais déplacer ni supprimer Documents/ depuis l'Explorateur.</text>
+
+        <!-- Autres appareils -->
+        <rect x="20" y="392" width="360" height="40" rx="8" stroke-width="1.2" stroke-dasharray="5 3" style="fill:none;stroke:var(--bleu)"/>
+        <text x="200" y="417" text-anchor="middle" font-size="11" style="fill:var(--muted)">… et le même schéma sur l'appareil de chaque collègue</text>
+        <path d="M380 412 C 520 412, 560 330, 700 300" stroke-width="1.6" fill="none" stroke-dasharray="5 3" marker-end="url(#m-teal)" style="stroke:var(--teal)"/>
+
+        <!-- OVH -->
+        <text x="20" y="470" font-size="14" font-weight="700" letter-spacing=".06em" style="fill:var(--orange)">D'OÙ VIENT LE CODE</text>
+        <rect x="20" y="482" width="230" height="56" rx="6" stroke-width="1.2" style="fill:var(--panel);stroke:var(--orange)"/>
+        <text x="32" y="503" font-weight="700">GitHub · Cocothib/suivivmc</text>
+        <text x="32" y="521" font-size="11" style="fill:var(--muted)">branche main</text>
+        <path d="M250 510 H318" stroke-width="2" fill="none" marker-end="url(#m-orange)" style="stroke:var(--orange)"/>
+        <text x="284" y="502" text-anchor="middle" font-size="11" style="fill:var(--orange)">push → FTP</text>
+        <rect x="320" y="482" width="280" height="56" rx="6" stroke-width="1.2" style="fill:var(--panel);stroke:var(--orange)"/>
+        <text x="332" y="503" font-weight="700">OVH · …/suivivmc/</text>
+        <text x="332" y="521" font-size="11" style="fill:var(--muted)">sert le code — aucune donnée</text>
+        <path d="M460 482 V434" stroke-width="2" fill="none" marker-end="url(#m-orange)" style="stroke:var(--orange)"/>
+        <text x="470" y="462" font-size="10.5" style="fill:var(--orange)">chargement / mise à jour du shell</text>
+      </g>
+    </svg>
+    <div class="m-only m-flow">
+      <div class="m-head">Sur chaque appareil</div>
+      <div class="m-box"><b>index.html + sw.js (v46)</b><span>Application complète, fonctionne hors ligne</span></div>
+      <div class="m-box"><b>IndexedDB : copie locale complète</b><span>conducteurs, visites, vmcs, actions, config + instantané de la dernière synchro</span></div>
+      <div class="m-box"><b>MSAL : session Microsoft 365</b><span>compte Agriwatt, jeton renouvelé en silence</span></div>
+      <div class="m-link teal">Microsoft Graph, lecture/écriture avec ETag</div>
+      <div class="m-head">SharePoint · site QHSE</div>
+      <div class="m-box orange"><b>Documents/SuiviVMC/vmc-data.json</b><span>le fichier qui fait autorité (_meta.version)</span></div>
+      <div class="m-box"><b>activity-log.json · .presence/ · photos/ · PDF_envois/</b><span>journal, présence, photos externalisées, PDF pour Power Automate</span></div>
+      <div class="m-box"><b>Shared/referentiels.json</b><span>référentiel commun aux apps QHSE</span></div>
+      <div class="m-head orange">D'où vient le code</div>
+      <div class="m-box orange"><b>GitHub → OVH (FTP au push)</b><span>l'hébergement ne voit aucune donnée</span></div>
+    </div>
+    <figcaption>Les données ne quittent jamais Microsoft 365 : l'hébergement OVH sert uniquement le code. Un appareil hors ligne continue de travailler sur sa copie locale et rattrape SharePoint au retour du réseau.</figcaption>
+    <div class="legend"><span class="l-bleu">appareil / stockage</span><span class="l-teal">échanges Graph</span><span class="l-orange">déploiement du code</span></div>
+  </figure>
+
+  <!-- ============================================================ 2 -->
+  <h2>2. Le parcours d'une visite</h2>
+  <p>Une VMC part d'une <b>visite planifiée</b> (un observateur, un mois), devient une <b>VMC réalisée</b> avec sa grille, ses photos et ses signatures, puis alimente les <b>actions</b>, le <b>tableau de bord</b> et les <b>remarques</b>.</p>
+  <figure class="d">
+    <svg viewBox="0 0 1120 470" role="img" aria-label="Parcours : Planning → Nouvelle VMC → Enregistrement → Actions → Dashboard et Remarques, avec les enregistrements créés à chaque étape.">
+      <g font-family="Century Gothic, URW Gothic, Questrial, sans-serif" font-size="11" fill="currentColor">
+        <!-- 5 étapes -->
+        <g stroke-width="1.5">
+          <rect x="20" y="40" width="196" height="120" rx="8" style="fill:var(--bleu-soft);stroke:var(--bleu)"/>
+          <rect x="246" y="40" width="196" height="120" rx="8" style="fill:var(--bleu-soft);stroke:var(--bleu)"/>
+          <rect x="472" y="40" width="196" height="120" rx="8" style="fill:var(--orange-soft);stroke:var(--orange)"/>
+          <rect x="698" y="40" width="196" height="120" rx="8" style="fill:var(--bleu-soft);stroke:var(--bleu)"/>
+          <rect x="924" y="40" width="176" height="120" rx="8" style="fill:var(--teal-soft);stroke:var(--teal)"/>
+        </g>
+        <g font-size="22" font-weight="700" style="fill:var(--orange)">
+          <text x="34" y="68">1</text><text x="260" y="68">2</text><text x="486" y="68" style="fill:var(--bleu)">3</text><text x="712" y="68">4</text><text x="938" y="68">5</text>
+        </g>
+        <text x="60" y="68" font-size="15" font-weight="700">Planning</text>
+        <text x="34" y="92" font-size="11">observateurs × 12 mois</text>
+        <text x="34" y="110" font-size="11">clic sur une case = visite</text>
+        <text x="34" y="128" font-size="11">planifiée le 15 · import Excel</text>
+        <text x="34" y="146" font-size="11">invitations .ics / .eml</text>
+
+        <text x="286" y="68" font-size="15" font-weight="700">Nouvelle VMC</text>
+        <text x="260" y="92" font-size="11">grille ou exercice d'urgence</text>
+        <text x="260" y="110" font-size="11">chantier (liste PDP), observé</text>
+        <text x="260" y="128" font-size="11">items OK / NOK / NA</text>
+        <text x="260" y="146" font-size="11">photos (5 max), 2 signatures</text>
+
+        <text x="512" y="68" font-size="15" font-weight="700">Enregistrement</text>
+        <text x="486" y="92" font-size="11">VMC créée, visite du mois</text>
+        <text x="486" y="110" font-size="11">passée en « réalisée »</text>
+        <text x="486" y="128" font-size="11">PDF généré et déposé</text>
+        <text x="486" y="146" font-size="11">dans PDF_envois/ · synchro</text>
+
+        <text x="738" y="68" font-size="15" font-weight="700">Actions</text>
+        <text x="712" y="92" font-size="11">actions correctives</text>
+        <text x="712" y="110" font-size="11">À faire → En cours → Soldée</text>
+        <text x="712" y="128" font-size="11">rappel par mail, retard</text>
+        <text x="712" y="146" font-size="11">écart transmis à SuiviNC</text>
+
+        <text x="964" y="68" font-size="15" font-weight="700">Dashboard</text>
+        <text x="938" y="92" font-size="11">taux réalisé / dû, retards</text>
+        <text x="938" y="110" font-size="11">graphique mensuel</text>
+        <text x="938" y="128" font-size="11">Remarques : points</text>
+        <text x="938" y="146" font-size="11">d'amélioration, pratiques</text>
+
+        <g stroke-width="2" fill="none" marker-end="url(#m-bleu)" style="stroke:var(--bleu)">
+          <path d="M216 100 H244"/><path d="M442 100 H470"/><path d="M668 100 H696"/><path d="M894 100 H922"/>
+        </g>
+
+        <!-- Enregistrements créés -->
+        <text x="20" y="200" font-size="14" font-weight="700" letter-spacing=".06em" style="fill:var(--teal)">CE QUI EST ÉCRIT DANS LES DONNÉES</text>
+        <g stroke-width="1.2" stroke-dasharray="4 3" style="stroke:var(--teal)" fill="none">
+          <rect x="20" y="212" width="196" height="92" rx="5"/>
+          <rect x="246" y="212" width="422" height="92" rx="5"/>
+          <rect x="698" y="212" width="196" height="92" rx="5"/>
+          <rect x="924" y="212" width="176" height="92" rx="5"/>
+        </g>
+        <g font-size="11">
+          <text x="30" y="232" font-weight="700">visite</text>
+          <text x="30" y="250">conducteurId, mois, année</text>
+          <text x="30" y="266">datePrevue, statut planifie</text>
+          <text x="30" y="282">vmcId = vide</text>
+
+          <text x="256" y="232" font-weight="700">vmc</text><text x="290" y="232">+ la visite passe à</text><text x="412" y="232" font-weight="700">statut = realise, vmcId = n° de la VMC</text>
+          <text x="256" y="250">type, date, site, conducteurId, observeNom, scores</text>
+          <text x="256" y="266">grille[], pointsAmelioration, bonnesPratiques</text>
+          <text x="256" y="282">photos[] (→ photos/ SharePoint), 2 signatures</text>
+          <text x="256" y="298" style="fill:var(--muted)">supprimer la VMC remet la visite en planifiée</text>
+
+          <text x="708" y="232" font-weight="700">action</text>
+          <text x="708" y="250">vmcId, description</text>
+          <text x="708" y="266">responsable, délai, statut</text>
+          <text x="708" y="282">ncTransmis → SuiviNC</text>
+
+          <text x="934" y="232" font-weight="700">rien : calculé</text>
+          <text x="934" y="250">à partir des visites,</text>
+          <text x="934" y="266">VMC et actions,</text>
+          <text x="934" y="282">selon l'effectif</text>
+        </g>
+
+        <!-- Effectif -->
+        <rect x="20" y="332" width="1080" height="112" rx="8" stroke-width="1.5" style="fill:var(--jaune-soft);stroke:var(--jaune)"/>
+        <text x="36" y="356" font-size="14" font-weight="700">Effectif : ce qui est « dû » dépend de la présence de chaque observateur</text>
+        <text x="36" y="378" font-size="11">Paramètres › Observateurs : entrée / sortie, absences (vacances, arrêt, congé long, intégration, mutation…), non applicable.</text>
+        <text x="36" y="398" font-size="11">Un mois non couvert sort du dénominateur (taux, retards, graphique, invitations) ; une VMC réalisée compte toujours.</text>
+        <text x="36" y="418" font-size="11" font-weight="700" style="fill:var(--orange)">Un départ = une date de sortie, jamais une suppression (visites et VMC deviendraient orphelines).</text>
+        <text x="36" y="436" font-size="11" style="fill:var(--muted)">Onglet Paramètres réservé aux administrateurs (config._admins).</text>
+      </g>
+    </svg>
+    <div class="m-only m-flow">
+      <div class="m-box"><b>1 · Planning</b><span>observateurs × 12 mois, clic = visite planifiée (le 15, jour ouvré), import Excel, invitations .ics/.eml</span><ul><li><i>visite</i> : conducteurId, mois, année, datePrevue, statut planifie</li></ul></div>
+      <div class="m-box"><b>2 · Nouvelle VMC</b><span>grille ou exercice d'urgence, chantier (liste SuiviPDP), items OK/NOK/NA, photos, 2 signatures</span></div>
+      <div class="m-box orange"><b>3 · Enregistrement</b><span>VMC créée, visite passée en « réalisée » avec vmcId, PDF déposé dans PDF_envois/, synchro</span><ul><li><i>vmc</i> : grille[], scores, photos[], signatures…</li><li>supprimer la VMC remet la visite en planifiée</li></ul></div>
+      <div class="m-box"><b>4 · Actions</b><span>À faire → En cours → Soldée, rappel mail, écart transmis à SuiviNC</span><ul><li><i>action</i> : vmcId, responsable, délai, statut, ncTransmis</li></ul></div>
+      <div class="m-box teal"><b>5 · Dashboard et Remarques</b><span>taux réalisé / dû, retards, graphique mensuel, points d'amélioration — rien n'est stocké, tout est calculé</span></div>
+      <div class="m-box jaune"><b>Effectif</b><span>entrée/sortie, absences, non applicable : les mois non couverts sortent du dénominateur. Un départ = date de sortie, jamais une suppression.</span></div>
+    </div>
+    <figcaption>Le lien clé est <code>visite.vmcId</code> : c'est lui qui fait passer un mois de « planifié » à « réalisé » dans le planning et le tableau de bord. Le PDF est régénéré à chaque enregistrement à partir de la VMC ; il n'est pas la source des données.</figcaption>
+  </figure>
+
+  <!-- ============================================================ 3 -->
+  <h2>3. La synchronisation entre appareils</h2>
+  <p>Chaque saisie est d'abord écrite en local, puis poussée vers <code>vmc-data.json</code> au bout d'1,5 s. Avant d'écrire, l'application relit le fichier : si un collègue l'a modifié entre-temps, elle <b>fusionne</b> au lieu d'écraser. Les autres appareils relisent le fichier toutes les 15 s.</p>
+  <figure class="d">
+    <svg viewBox="0 0 1120 520" role="img" aria-label="Séquence de synchronisation : saisie locale, attente 1,5 s, relecture avec ETag, fusion si besoin, écriture protégée, puis lecture par les collègues toutes les 15 s.">
+      <g font-family="Century Gothic, URW Gothic, Questrial, sans-serif" font-size="11" fill="currentColor">
+        <!-- couloirs -->
+        <g stroke-width="1" style="stroke:var(--line)" fill="none">
+          <rect x="20" y="30" width="1080" height="150" rx="6"/>
+          <rect x="20" y="200" width="1080" height="130" rx="6"/>
+          <rect x="20" y="350" width="1080" height="150" rx="6"/>
+        </g>
+        <text x="32" y="50" font-size="13" font-weight="700" letter-spacing=".06em" style="fill:var(--bleu)">VOTRE APPAREIL</text>
+        <text x="32" y="220" font-size="13" font-weight="700" letter-spacing=".06em" style="fill:var(--orange)">SHAREPOINT · vmc-data.json</text>
+        <text x="32" y="370" font-size="13" font-weight="700" letter-spacing=".06em" style="fill:var(--teal)">APPAREIL D'UN COLLÈGUE</text>
+
+        <!-- votre appareil -->
+        <g stroke-width="1.4" style="stroke:var(--bleu);fill:var(--bleu-soft)">
+          <rect x="32" y="66" width="150" height="92" rx="6"/>
+          <rect x="212" y="66" width="150" height="92" rx="6"/>
+          <rect x="392" y="66" width="190" height="92" rx="6"/>
+          <rect x="612" y="66" width="200" height="92" rx="6"/>
+          <rect x="842" y="66" width="246" height="92" rx="6"/>
+        </g>
+        <g stroke-width="1.8" fill="none" marker-end="url(#m-bleu)" style="stroke:var(--bleu)">
+          <path d="M182 112 H210"/><path d="M362 112 H390"/><path d="M582 112 H610"/><path d="M812 112 H840"/>
+        </g>
+        <text x="44" y="88" font-weight="700">1. Saisie</text>
+        <text x="44" y="106" font-size="11">écrite dans IndexedDB</text>
+        <text x="44" y="122" font-size="11">badge « non enregistré »</text>
+        <text x="44" y="138" font-size="11">drapeau persistant</text>
+
+        <text x="224" y="88" font-weight="700">2. Attente 1,5 s</text>
+        <text x="224" y="106" font-size="11">regroupe les frappes</text>
+        <text x="224" y="122" font-size="11">hors ligne : on garde</text>
+        <text x="224" y="138" font-size="11">tout, reprise au retour</text>
+
+        <text x="404" y="88" font-weight="700">3. Relecture du fichier</text>
+        <text x="404" y="106" font-size="11">version + ETag distants</text>
+        <text x="404" y="122" font-size="11">distant plus récent que</text>
+        <text x="404" y="138" font-size="11">moi ? → 4, sinon → 5</text>
+
+        <text x="624" y="88" font-weight="700">4. Fusion 3 sources</text>
+        <text x="624" y="106" font-size="11">instantané · local · distant</text>
+        <text x="624" y="122" font-size="11">champ par champ, le plus</text>
+        <text x="624" y="138" font-size="11">récent gagne, ids remappés</text>
+
+        <text x="854" y="88" font-weight="700">5. Écriture protégée</text>
+        <text x="854" y="106" font-size="11">PUT If-Match → version + 1</text>
+        <text x="854" y="122" font-size="11">412 = écrit entre-temps</text>
+        <text x="854" y="138" font-size="11">→ retour en 3 (3 essais)</text>
+
+        <!-- vers SharePoint -->
+        <path d="M487 158 V236" stroke-width="1.8" fill="none" stroke-dasharray="4 3" marker-start="url(#m-orange)" style="stroke:var(--orange)"/>
+        <text x="497" y="200" font-size="11" style="fill:var(--orange)">GET</text>
+        <path d="M965 158 V236" stroke-width="1.8" fill="none" marker-end="url(#m-orange)" style="stroke:var(--orange)"/>
+        <text x="975" y="200" font-size="11" style="fill:var(--orange)">PUT</text>
+
+        <!-- SharePoint -->
+        <g stroke-width="1.4" style="stroke:var(--orange);fill:var(--orange-soft)">
+          <rect x="392" y="238" width="190" height="76" rx="6"/>
+          <rect x="842" y="238" width="246" height="76" rx="6"/>
+        </g>
+        <text x="404" y="260" font-weight="700">version 343 · ETag A</text>
+        <text x="404" y="278" font-size="11">savedBy : Jérémy B.</text>
+        <text x="404" y="296" font-size="11">photos déjà externalisées</text>
+        <text x="854" y="260" font-weight="700">version 344 · ETag B</text>
+        <text x="854" y="278" font-size="11">savedBy : vous · lastSaved</text>
+        <text x="854" y="296" font-size="11">+ journal activity-log.json</text>
+        <path d="M582 276 H840" stroke-width="1.8" fill="none" marker-end="url(#m-orange)" style="stroke:var(--orange)"/>
+        <text x="711" y="268" text-anchor="middle" font-size="11" style="fill:var(--orange)">remplacé d'un bloc</text>
+
+        <!-- collègue -->
+        <g stroke-width="1.4" style="stroke:var(--teal);fill:var(--teal-soft)">
+          <rect x="32" y="386" width="230" height="96" rx="6"/>
+          <rect x="292" y="386" width="290" height="96" rx="6"/>
+          <rect x="612" y="386" width="230" height="96" rx="6"/>
+          <rect x="872" y="386" width="216" height="96" rx="6"/>
+        </g>
+        <g stroke-width="1.8" fill="none" marker-end="url(#m-teal)" style="stroke:var(--teal)">
+          <path d="M262 434 H290"/><path d="M582 434 H610"/><path d="M842 434 H870"/>
+        </g>
+        <path d="M965 314 V384" stroke-width="1.8" fill="none" marker-end="url(#m-teal)" stroke-dasharray="4 3" style="stroke:var(--teal)"/>
+        <text x="975" y="352" font-size="11" style="fill:var(--teal)">GET toutes les 15 s</text>
+
+        <text x="44" y="408" font-weight="700">Toutes les 15 s : relecture</text>
+        <text x="44" y="426" font-size="11">distant &gt; local → on applique</text>
+        <text x="44" y="442" font-size="11">plus petit + ETag changé</text>
+        <text x="44" y="458" font-size="11">= restauration → adoptée</text>
+
+        <text x="304" y="408" font-weight="700">Saisie en cours ?</text>
+        <text x="304" y="426" font-size="11">formulaire ou modale ouvert : la mise à</text>
+        <text x="304" y="442" font-size="11">jour attend et s'applique à la</text>
+        <text x="304" y="458" font-size="11">prochaine navigation · dirty → save</text>
+
+        <text x="624" y="408" font-weight="700">Application</text>
+        <text x="624" y="426" font-size="11">IndexedDB remplacée,</text>
+        <text x="624" y="442" font-size="11">photos réinjectées,</text>
+        <text x="624" y="458" font-size="11">page re-rendue</text>
+
+        <text x="884" y="408" font-weight="700">Présence</text>
+        <text x="884" y="426" font-size="11">.presence/&lt;nom&gt;.json</text>
+        <text x="884" y="442" font-size="11">toutes les 30 s → bandeau</text>
+        <text x="884" y="458" font-size="11">« Également connecté(s) »</text>
+      </g>
+    </svg>
+    <div class="m-only m-flow">
+      <div class="m-head">Votre appareil</div>
+      <div class="m-box"><b>1 · Saisie</b><span>écrite dans IndexedDB, badge « non enregistré », drapeau persistant</span></div>
+      <div class="m-box"><b>2 · Attente 1,5 s</b><span>regroupe les frappes ; hors ligne, tout est gardé et repris au retour</span></div>
+      <div class="m-box"><b>3 · Relecture du fichier</b><span>version + ETag distants ; distant plus récent que mienne → fusion</span></div>
+      <div class="m-box"><b>4 · Fusion 3 sources</b><span>instantané · local · distant, champ par champ, le plus le plus récent gagne, ids en collision remappés</span></div>
+      <div class="m-box"><b>5 · Écriture protégée</b><span>PUT If-Match → version + 1 ; 412 = quelqu'un a écrit entre-temps → on recommence (3 fois max)</span></div>
+      <div class="m-head orange">SharePoint · vmc-data.json</div>
+      <div class="m-box orange"><b>version 343 → 344</b><span>fichier remplacé d'un bloc ; journal dans activity-log.json</span></div>
+      <div class="m-head teal">Appareil d'un collègue</div>
+      <div class="m-box teal"><b>Relecture toutes les 15 s</b><span>version distante plus grande → application ; plus petit + ETag changé = fichier restauré → adopté</span></div>
+      <div class="m-box teal"><b>Saisie en cours ?</b><span>la mise à jour attend et s'applique à la prochaine navigation</span></div>
+      <div class="m-box teal"><b>Présence</b><span>.presence/&lt;nom&gt;.json toutes les 30 s → bandeau connecté(s) »</span></div>
+    </div>
+    <figcaption>Le numéro de version dans <code>_meta</code> et l'ETag SharePoint sont les deux garde-fous : le premier dit qui est en avance, le second empêche deux écritures simultanées. Si le fichier distant est illisible, l'application refuse d'écrire à l'aveugle et réessaie plus tard. Les suppressions locales ne l'emportent jamais sur une modification faite ailleurs.</figcaption>
+    <div class="legend"><span class="l-bleu">votre appareil</span><span class="l-orange">écritures SharePoint</span><span class="l-teal">lectures des autres appareils</span></div>
+  </figure>
+
+  <!-- ============================================================ 4 -->
+  <h2>4. Les échanges avec les autres outils</h2>
+  <p>Suivi VMC n'est pas isolé : il lit le référentiel commun alimenté par SuiviPDP, envoie ses écarts à SuiviNC, dépose ses PDF pour Power Automate et produit les invitations et exports que l'on ouvre dans Outlook et Excel.</p>
+  <figure class="d">
+    <svg viewBox="0 0 1120 440" role="img" aria-label="Suivi VMC au centre ; autour : SuiviPDP et le référentiel commun, SuiviNC, Power Automate et la messagerie, Outlook et Excel.">
+      <g font-family="Century Gothic, URW Gothic, Questrial, sans-serif" font-size="11" fill="currentColor">
+        <!-- centre -->
+        <rect x="440" y="160" width="240" height="120" rx="10" stroke-width="2" style="fill:var(--bleu-soft);stroke:var(--bleu)"/>
+        <text x="560" y="196" text-anchor="middle" font-size="18" font-weight="700">Suivi VMC</text>
+        <text x="560" y="218" text-anchor="middle" font-size="11" style="fill:var(--muted)">Documents/SuiviVMC/</text>
+        <text x="560" y="236" text-anchor="middle" font-size="11" style="fill:var(--muted)">vmc-data.json · photos/ · PDF_envois/</text>
+        <text x="560" y="262" text-anchor="middle" font-size="11">Dashboard · Planning · VMC · Actions</text>
+
+        <!-- SuiviPDP + référentiel (gauche haut) -->
+        <rect x="20" y="30" width="330" height="120" rx="8" stroke-width="1.5" style="fill:var(--panel);stroke:var(--teal)"/>
+        <text x="32" y="54" font-size="15" font-weight="700" style="fill:var(--teal)">SuiviPDP → Shared/referentiels.json</text>
+        <text x="32" y="76" font-size="11">chantiers → liste du champ Site</text>
+        <text x="32" y="94" font-size="11">personnel → alerte habilitation / visite</text>
+        <text x="32" y="112" font-size="11">médicale expirée de l'observateur</text>
+        <text x="32" y="136" font-size="10.5" style="fill:var(--muted)">relu au plus toutes les heures</text>
+        <path d="M350 100 C 400 100, 420 190, 438 190" stroke-width="2" fill="none" stroke-dasharray="5 3" marker-end="url(#m-teal)" style="stroke:var(--teal)"/>
+        <text x="380" y="140" font-size="11" style="fill:var(--teal)">lecture</text>
+
+        <!-- SuiviNC (droite haut) -->
+        <rect x="770" y="30" width="330" height="120" rx="8" stroke-width="1.5" style="fill:var(--panel);stroke:var(--teal)"/>
+        <text x="782" y="54" font-size="15" font-weight="700" style="fill:var(--teal)">SuiviNC · plan d'actions QSE</text>
+        <text x="782" y="76" font-size="11">Actions › Transmettre à SuiviNC →</text>
+        <text x="782" y="94" font-size="11">événement events_suivivmc (source</text>
+        <text x="782" y="112" font-size="11">terrain, purge 90 j), action ncTransmis</text>
+        <text x="782" y="136" font-size="10.5" style="fill:var(--muted)">retour : carte Plan d'actions QSE</text>
+        <path d="M682 190 C 700 190, 720 100, 770 100" stroke-width="2" fill="none" marker-end="url(#m-teal)" style="stroke:var(--teal)"/>
+        <path d="M770 120 C 730 120, 720 210, 682 210" stroke-width="2" fill="none" stroke-dasharray="5 3" marker-end="url(#m-teal)" style="stroke:var(--teal)"/>
+        <text x="690" y="168" font-size="10.5" style="fill:var(--teal)">écarts ↑ · nc, actions ↓</text>
+
+        <!-- Power Automate (gauche bas) -->
+        <rect x="20" y="290" width="330" height="120" rx="8" stroke-width="1.5" style="fill:var(--panel);stroke:var(--orange)"/>
+        <text x="32" y="314" font-size="15" font-weight="700" style="fill:var(--orange)">Power Automate → messagerie</text>
+        <text x="32" y="336" font-size="11">le PDF de chaque VMC est déposé dans</text>
+        <text x="32" y="354" font-size="11">PDF_envois/ ; le flux surveille le dossier</text>
+        <text x="32" y="372" font-size="11">et envoie le mail (observateur + adresse VMC)</text>
+        <text x="32" y="396" font-size="10.5" style="fill:var(--muted)">métadonnées (destinataires, sujet) : prévu, non activé</text>
+        <path d="M438 250 C 420 250, 400 340, 350 340" stroke-width="2" fill="none" marker-end="url(#m-orange)" style="stroke:var(--orange)"/>
+        <text x="372" y="300" font-size="11" style="fill:var(--orange)">PDF</text>
+
+        <!-- Outlook / Excel (droite bas) -->
+        <rect x="770" y="290" width="330" height="120" rx="8" stroke-width="1.5" style="fill:var(--panel);stroke:var(--orange)"/>
+        <text x="782" y="314" font-size="15" font-weight="700" style="fill:var(--orange)">Outlook · Excel (fichiers locaux)</text>
+        <text x="782" y="336" font-size="11">Planning : .ics par case ou .eml annuel</text>
+        <text x="782" y="354" font-size="11">Actions : rappel par mailto</text>
+        <text x="782" y="372" font-size="11">Paramètres › Données : export Excel</text>
+        <text x="782" y="390" font-size="11">et import (doublons ignorés)</text>
+        <path d="M682 250 C 700 250, 720 340, 770 340" stroke-width="2" fill="none" marker-end="url(#m-orange)" style="stroke:var(--orange)"/>
+        <text x="696" y="278" font-size="10.5" style="fill:var(--orange)">.ics · .eml · .xlsx</text>
+
+        <!-- Microsoft 365 -->
+        <text x="560" y="425" text-anchor="middle" font-size="11" style="fill:var(--muted)">Tout passe par le compte Microsoft 365 de l'utilisateur ; aucun envoi de mail direct depuis l'application.</text>
+      </g>
+    </svg>
+    <div class="m-only m-flow">
+      <div class="m-box teal"><b>SuiviPDP → Shared/referentiels.json (lecture)</b><span>chantiers → liste du champ Site ; personnel → alertes habilitation / visite médicale expirée</span></div>
+      <div class="m-box teal"><b>SuiviNC · plan d'actions QSE</b><span>« Transmettre à SuiviNC » écrit un événement dans referentiels.json (ncTransmis) ; en retour, carte « Plan d'actions QSE » sur le dashboard</span></div>
+      <div class="m-box orange"><b>Power Automate → messagerie</b><span>PDF de la VMC déposé dans PDF_envois/ à chaque enregistrement ; le flux envoie le mail</span></div>
+      <div class="m-box orange"><b>Outlook · Excel</b><span>invitations .ics / .eml, rappel mailto, export et import Excel — fichiers générés dans le navigateur</span></div>
+    </div>
+    <figcaption>Le référentiel commun <code>Shared/referentiels.json</code> est découpé en sections, chacune écrite par une seule application (SuiviPDP pour chantiers et personnel, Suivi VMC pour ses événements) : pas de fusion de contenu, un simple verrou ETag suffit.</figcaption>
+    <div class="legend"><span class="l-teal">référentiel partagé</span><span class="l-orange">fichiers produits</span></div>
+  </figure>
+
+  <!-- ============================================================ 5 -->
+  <h2>5. Les fichiers en une table</h2>
+  <div class="wrap">
+    <table>
+      <thead><tr><th>Fichier</th><th>Contenu</th><th>Qui écrit</th><th>Quand</th></tr></thead>
+      <tbody>
+        <tr><td class="k">vmc-data.json <span class="tag orange">autorité</span></td><td>conducteurs, visites, vmcs, actions, config + <code>_meta</code> {version, lastSaved, savedBy}. Photos sous forme de {id, name, path}.</td><td>chaque appareil, avec verrou ETag et fusion 3 sources</td><td>1,5 s après une saisie ; relu toutes les 15 s</td></tr>
+        <tr><td class="k">activity-log.json</td><td>{events:[{ts, user, action, details}]} : connexion, sauvegarde, création / modification / suppression, conflits, divergences de version. 5 000 événements max.</td><td>chaque appareil (file d'attente, ETag)</td><td>2 s après l'événement</td></tr>
+        <tr><td class="k">.presence/&lt;nom&gt;.json</td><td>{user, ts, tab} — sert au bandeau « Également connecté(s) ».</td><td>chaque appareil connecté</td><td>toutes les 30 s ; périmé après 90 s</td></tr>
+        <tr><td class="k">photos/&lt;vmcId&gt;/&lt;id&gt;.jpg</td><td>photos compressées (1 024 px, JPEG) sorties du JSON pour le garder léger ; rechargées à l'affichage et dans le PDF.</td><td>l'appareil qui enregistre la VMC</td><td>à chaque sauvegarde contenant de nouvelles photos</td></tr>
+        <tr><td class="k">PDF_envois/VMC_Nom_date.pdf</td><td>compte rendu complet : en-tête, grille, remarques, actions, photos, signatures.</td><td>l'appareil qui enregistre la VMC</td><td>à chaque enregistrement du formulaire (surveillé par Power Automate — ne pas y toucher)</td></tr>
+        <tr><td class="k">Shared/referentiels.json <span class="tag teal">commun</span></td><td>sections entreprises, chantiers, personnel, agences, exutoires, events_suivivmc. Suivi VMC lit chantiers et personnel, écrit events_suivivmc.</td><td>une application par section</td><td>relu au plus toutes les heures ; écrit à la transmission d'un écart</td></tr>
+        <tr><td class="k">IndexedDB (navigateur) <span class="tag bleu">local</span></td><td>copie complète des données, instantané de la dernière synchro, drapeau « modifs en attente », cache base64 des photos.</td><td>l'application, sur l'appareil</td><td>à chaque saisie et à chaque synchro</td></tr>
+        <tr><td class="k">sw.js / index.html <span class="tag bleu">code</span></td><td>le shell de l'application ; <code>CACHE_NAME</code> de sw.js donne le numéro de version affiché dans la barre.</td><td>GitHub → OVH (FTP au push sur main)</td><td>mise à jour au retour au premier plan, rechargement seulement si aucune saisie en cours</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">Si une VMC « disparaît » sur un appareil mais reste visible sur un autre, c'est presque toujours que <code>vmc-data.json</code> est devenu inaccessible (dossier déplacé ou supprimé) : chaque appareil continue alors sur sa copie locale. Vérifier la corbeille du site QHSE avant toute autre manipulation, et ne rien enregistrer depuis l'appareil qui a les données périmées.</p>
+</main>
+</body>
+</html>
