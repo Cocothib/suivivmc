@@ -3795,6 +3795,12 @@ const DataSync = {
 
         const autoIdStores = new Set(['vmcs', 'actions', 'visites']);
         const remap = { vmcs: {}, actions: {}, visites: {}, conducteurs: {} };
+        // BUG #20 — Les remappings d'ID ne doivent etre propages qu'aux FK des
+        // enregistrements LOCAUX (ajoutes/modifies ici) : un enregistrement remote
+        // qui pointe legitimement vers l'ID en collision cote remote ne doit pas
+        // etre touche (sinon une visite d'un autre observateur se retrouve liee a
+        // la VMC locale renumerotee). On memorise ici { rec, snap } des locaux.
+        const localRefs = { visites: [], vmcs: [], actions: [] };
         const stores = ['conducteurs', 'visites', 'vmcs', 'actions', 'config'];
 
         for (const store of stores) {
@@ -3843,6 +3849,7 @@ const DataSync = {
                     const rem  = remoteById.get(entry.id);
                     const mergedRec = this._mergeRecord(snap, entry, rem, store);
                     remoteById.set(entry.id, mergedRec);
+                    if (localRefs[store]) localRefs[store].push({ rec: mergedRec, snap });
                 } else {
                     // Supprime a distance : conserver le comportement existant (re-creation).
                     localAdded.push(entry);
@@ -3855,6 +3862,7 @@ const DataSync = {
             }
             for (const entry of localAdded) {
                 const newEntry = { ...entry };
+                if (localRefs[store]) localRefs[store].push({ rec: newEntry, snap: snapById.get(entry.id) || null });
                 // BUG #13 — Les conducteurs ont un id MANUEL (maxId+1) : on les inclut
                 // dans le remap de collision au meme titre que les stores auto-increment,
                 // pour ne perdre aucune creation concurrente et patcher les FK.
@@ -3872,26 +3880,25 @@ const DataSync = {
             merged[store] = Array.from(remoteById.values());
         }
 
-        // Propager les remappings aux references croisees
+        // Propager les remappings aux references croisees — BUG #20 : uniquement
+        // sur les enregistrements locaux dont la FK a change depuis le snapshot
+        // (ou qui sont nouveaux). Une FK inchangee pointait deja vers un
+        // enregistrement connu du remote : elle est correcte telle quelle.
+        const patchFK = (refs, fk, map) => {
+            for (const { rec, snap } of refs) {
+                const val = rec[fk];
+                if (val == null || map[val] == null) continue;
+                if (snap && snap[fk] === val) continue; // FK heritee du remote → intacte
+                rec[fk] = map[val];
+            }
+        };
         if (Object.keys(remap.vmcs).length) {
-            for (const a of merged.actions) {
-                if (a.vmcId != null && remap.vmcs[a.vmcId] != null) a.vmcId = remap.vmcs[a.vmcId];
-            }
-            for (const v of merged.visites) {
-                if (v.vmcId != null && remap.vmcs[v.vmcId] != null) v.vmcId = remap.vmcs[v.vmcId];
-            }
+            patchFK(localRefs.actions, 'vmcId', remap.vmcs);
+            patchFK(localRefs.visites, 'vmcId', remap.vmcs);
         }
         if (Object.keys(remap.conducteurs).length) {
-            for (const v of merged.vmcs) {
-                if (v.conducteurId != null && remap.conducteurs[v.conducteurId] != null) {
-                    v.conducteurId = remap.conducteurs[v.conducteurId];
-                }
-            }
-            for (const vi of merged.visites) {
-                if (vi.conducteurId != null && remap.conducteurs[vi.conducteurId] != null) {
-                    vi.conducteurId = remap.conducteurs[vi.conducteurId];
-                }
-            }
+            patchFK(localRefs.vmcs, 'conducteurId', remap.conducteurs);
+            patchFK(localRefs.visites, 'conducteurId', remap.conducteurs);
         }
 
         // #15 — reinjecter le cache base64 local sur les photos externalisees.
