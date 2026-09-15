@@ -5069,6 +5069,18 @@ const ConfigPage = {
                     </div>
                 </div></div>
 
+                <!-- Restauration d'une VMC depuis son rapport PDF -->
+                <div class="card mb-3"><div class="card-body">
+                    <h6>\u{1F4C4} Restaurer une VMC depuis un rapport PDF</h6>
+                    <p class="text-muted small mb-2">Pour une VMC saisie sur un appareil qui n'a pas pu se resynchroniser : déposez le rapport PDF généré par l'application. Les données, photos et signatures sont relues depuis le PDF, puis la VMC est recréée et sauvegardée.</p>
+                    <label class="btn btn-outline-primary mb-0">
+                        \u{1F4C4} Choisir un rapport PDF
+                        <input type="file" accept=".pdf,application/pdf" id="input-import-pdf" class="d-none">
+                    </label>
+                    <div id="pdf-import-status" class="small text-muted mt-2"></div>
+                    <div id="pdf-import-preview" class="mt-3 d-none"></div>
+                </div></div>
+
                 <!-- Zone dangereuse -->
                 <div class="card border-danger"><div class="card-body">
                     <h6 class="text-danger">\u26A0\uFE0F Zone dangereuse</h6>
@@ -5932,6 +5944,11 @@ const ConfigPage = {
         document.getElementById('input-import-xlsx').onchange = e => {
             const file = e.target.files[0];
             if (file) ImportExport.importXLSX(file);
+        };
+        document.getElementById('input-import-pdf').onchange = e => {
+            const file = e.target.files[0];
+            e.target.value = '';
+            PdfImport.handleFile(file);
         };
         document.getElementById('btn-reset-db').onclick = async () => {
             if (confirm('Supprimer TOUTES les données locales ? Les données du fichier partagé ne sont pas affectées.')) {
@@ -9334,6 +9351,17 @@ const ImportExport = {
             .replace(/[^A-Za-z0-9 _.-]/g, '') || 'rapport';
         const safeDate = String(vmc.date || 'draft').replace(/[^A-Za-z0-9_.-]/g, '') || 'draft';
         const fileName = `VMC_${safeNom}_${safeDate}.pdf`;
+
+        // Donnees de la VMC (hors images) embarquees dans les metadonnees du PDF :
+        // permet a Parametres > Restaurer depuis un PDF de recreer la saisie a
+        // l'identique si l'appareil d'origine n'a jamais pu se resynchroniser.
+        try {
+            doc.setProperties({
+                title: `Rapport VMC ${vmc.conducteurNom || ''} ${vmc.date || ''}`.trim(),
+                subject: 'Suivi VMC',
+                keywords: PdfImport.encodePayload(vmc)
+            });
+        } catch (e) { console.warn('PDF: metadonnees non ecrites', e); }
         return { doc, fileName };
     },
 
@@ -9458,6 +9486,529 @@ const ImportExport = {
     }
 };
 
+</script>
+
+<!-- js\pdf-import.js -->
+<script>
+/* ================================================================
+   PdfImport — Restauration d'une VMC depuis un rapport PDF genere par l'app
+   (cas : VMC saisie sur un appareil qui n'a jamais pu se resynchroniser).
+   - PDF recents : la VMC (hors images) est embarquee dans les metadonnees du
+     PDF (champ Keywords, prefixe SUIVIVMC1:) → restauration exacte.
+   - PDF anciens : relecture du texte (en-tete, grille, remarques, actions).
+   - Photos et signatures : extraites des images du PDF dans les deux cas,
+     reconnues par leurs dimensions (55x40 mm et 70x30 mm dans _buildPDF).
+   pdf.js est charge a la demande depuis cdnjs, jamais inclus dans le shell.
+   ================================================================ */
+const PdfImport = {
+    PDFJS_URL:        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs',
+    PDFJS_WORKER_URL: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs',
+    PAYLOAD_PREFIX:   'SUIVIVMC1:',
+    PT_PER_MM:        72 / 25.4,
+    _lib:     null,
+    _pending: null,   // resultat du dernier parse, consomme par create()
+
+    async _loadLib() {
+        if (this._lib) return this._lib;
+        const lib = await import(this.PDFJS_URL);
+        lib.GlobalWorkerOptions.workerSrc = this.PDFJS_WORKER_URL;
+        this._lib = lib;
+        return lib;
+    },
+
+    /* ---------- Payload embarque dans le PDF (cote generation) ---------- */
+    encodePayload(vmc) {
+        const { photos, signatureObservateur, signatureObserve, signature, ...rest } = vmc;
+        const payload = {
+            ...rest,
+            photosMeta: (photos || []).map(p => ({ name: p?.name || '', date: p?.date || '' }))
+        };
+        return this.PAYLOAD_PREFIX + btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
+    },
+    decodePayload(keywords) {
+        if (typeof keywords !== 'string' || !keywords.startsWith(this.PAYLOAD_PREFIX)) return null;
+        try {
+            const b64 = keywords.slice(this.PAYLOAD_PREFIX.length).replace(/\s+/g, '');
+            return JSON.parse(decodeURIComponent(escape(atob(b64))));
+        } catch (e) {
+            console.warn('PdfImport: payload illisible', e);
+            return null;
+        }
+    },
+
+    /* ---------- Lecture du PDF ---------- */
+    async parse(file) {
+        const lib = await this._loadLib();
+        const buf = await file.arrayBuffer();
+        const pdf = await lib.getDocument({ data: buf }).promise;
+        const meta = await pdf.getMetadata().catch(() => null);
+        const payload = this.decodePayload(meta?.info?.Keywords);
+
+        const pages = [];
+        for (let p = 1; p <= pdf.numPages; p++) {
+            const page = await pdf.getPage(p);
+            const [x0, y0, x1, y1] = page.view;
+            const w = x1 - x0, h = y1 - y0;
+            const tc = await page.getTextContent();
+            const texts = tc.items
+                .filter(it => typeof it.str === 'string' && it.str.trim() !== '')
+                .map(it => ({ str: it.str, x: it.transform[4], y: h - it.transform[5], w: it.width, page: p }));
+            const images = await this._extractImages(lib, page, h, p);
+            pages.push({ num: p, w, h, texts, images });
+        }
+
+        // Conversion des images en dataURL (photos JPEG, signatures PNG avec transparence)
+        // avant destroy() : pdf.js libere les ImageBitmap a la fermeture du document.
+        const media = this._classifyImages(pages);
+        const photos = [];
+        for (const im of media.photos) {
+            const dataUrl = this._imageToDataURL(im.obj, 'image/jpeg', 0.85);
+            if (dataUrl) photos.push({ dataUrl, width: im.obj.width, height: im.obj.height });
+        }
+        const sigObs = media.sigObs ? this._imageToDataURL(media.sigObs.obj, 'image/png') : null;
+        const sigObe = media.sigObe ? this._imageToDataURL(media.sigObe.obj, 'image/png') : null;
+        pdf.destroy?.();
+
+        const warnings = [];
+        const data = payload ? this._fromPayload(payload) : this._fromText(pages, warnings);
+
+        if (payload && Array.isArray(payload.photosMeta) && payload.photosMeta.length !== photos.length) {
+            warnings.push(`${payload.photosMeta.length} photo(s) attendue(s), ${photos.length} retrouvée(s) dans le PDF.`);
+        }
+        if (!data.date) warnings.push('Date de la VMC non trouvée.');
+        if (!data.grille.length) warnings.push('Grille de contrôle non trouvée.');
+
+        return { source: payload ? 'payload' : 'texte', data, photos, sigObs, sigObe, warnings, fileName: file.name || '' };
+    },
+
+    /* Images peintes sur la page avec leur rectangle (points, origine haut-gauche),
+       obtenu en suivant la matrice de transformation courante (cm / q / Q). */
+    async _extractImages(lib, page, pageH, pnum) {
+        const OPS = lib.OPS;
+        const ops = await page.getOperatorList();
+        const out = [];
+        const mul = (m, c) => [
+            m[0] * c[0] + m[1] * c[2],        m[0] * c[1] + m[1] * c[3],
+            m[2] * c[0] + m[3] * c[2],        m[2] * c[1] + m[3] * c[3],
+            m[4] * c[0] + m[5] * c[2] + c[4], m[4] * c[1] + m[5] * c[3] + c[5]
+        ];
+        let ctm = [1, 0, 0, 1, 0, 0];
+        const stack = [];
+        for (let i = 0; i < ops.fnArray.length; i++) {
+            const fn = ops.fnArray[i], args = ops.argsArray[i];
+            if (fn === OPS.save) stack.push(ctm.slice());
+            else if (fn === OPS.restore) ctm = stack.pop() || ctm;
+            else if (fn === OPS.transform) ctm = mul(args, ctm);
+            else if (fn === OPS.paintImageXObject || fn === OPS.paintImageXObjectRepeat || fn === OPS.paintJpegXObject) {
+                const obj = await this._getObj(page, args[0]);
+                if (!obj || !obj.width) continue;
+                const pts = [[0, 0], [1, 0], [0, 1], [1, 1]].map(([u, v]) =>
+                    [ctm[0] * u + ctm[2] * v + ctm[4], ctm[1] * u + ctm[3] * v + ctm[5]]);
+                const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+                const left = Math.min(...xs), right = Math.max(...xs);
+                const bottom = Math.min(...ys), top = Math.max(...ys);
+                out.push({ page: pnum, obj, left, top: pageH - top, w: right - left, h: top - bottom });
+            }
+        }
+        return out;
+    },
+
+    _getObj(page, id) {
+        return new Promise(resolve => {
+            const store = String(id).startsWith('g_') ? page.commonObjs : page.objs;
+            let done = false;
+            const timer = setTimeout(() => { if (!done) { done = true; resolve(null); } }, 15000);
+            try {
+                store.get(id, data => { if (!done) { done = true; clearTimeout(timer); resolve(data); } });
+            } catch (e) {
+                clearTimeout(timer);
+                resolve(null);
+            }
+        });
+    },
+
+    /* Photos = 55x40 mm, signatures = 30 mm de haut (70 mm de large max), logo 25x12 mm ignore. */
+    _classifyImages(pages) {
+        const mm = v => v / this.PT_PER_MM;
+        const photos = [], sigs = [];
+        for (const pg of pages) {
+            for (const im of pg.images) {
+                const w = mm(im.w), h = mm(im.h);
+                if (Math.abs(w - 55) < 3 && Math.abs(h - 40) < 3) photos.push(im);
+                else if (Math.abs(h - 30) < 3 && w > 40 && w < 76) sigs.push(im);
+            }
+        }
+        photos.sort((a, b) => a.page - b.page || (Math.abs(a.top - b.top) > 5 ? a.top - b.top : a.left - b.left));
+        let sigObs = null, sigObe = null;
+        for (const s of sigs) {
+            const pg = pages[s.page - 1];
+            if (s.left < pg.w / 2) sigObs = sigObs || s; else sigObe = sigObe || s;
+        }
+        return { photos, sigObs, sigObe };
+    },
+
+    /* Convertit un objet image pdf.js ({bitmap} ou {data, kind}) en dataURL. */
+    _imageToDataURL(img, mime, quality) {
+        if (!img || !img.width || !img.height) return null;
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        if (img.bitmap) {
+            ctx.drawImage(img.bitmap, 0, 0);
+        } else if (img.data) {
+            const n = img.width * img.height;
+            const rgba = new Uint8ClampedArray(n * 4);
+            const d = img.data;
+            if (img.kind === 3) {                       // RGBA_32BPP
+                rgba.set(d.subarray(0, n * 4));
+            } else if (img.kind === 2) {                // RGB_24BPP
+                for (let i = 0, j = 0; i < n; i++, j += 3) {
+                    rgba[i * 4] = d[j]; rgba[i * 4 + 1] = d[j + 1]; rgba[i * 4 + 2] = d[j + 2]; rgba[i * 4 + 3] = 255;
+                }
+            } else if (img.kind === 1) {                // GRAYSCALE_1BPP
+                const rowBytes = (img.width + 7) >> 3;
+                for (let y = 0; y < img.height; y++) {
+                    for (let x = 0; x < img.width; x++) {
+                        const v = (d[y * rowBytes + (x >> 3)] >> (7 - (x & 7))) & 1 ? 255 : 0;
+                        const o = (y * img.width + x) * 4;
+                        rgba[o] = rgba[o + 1] = rgba[o + 2] = v; rgba[o + 3] = 255;
+                    }
+                }
+            } else {
+                return null;
+            }
+            ctx.putImageData(new ImageData(rgba, img.width, img.height), 0, 0);
+        } else {
+            return null;
+        }
+        return canvas.toDataURL(mime, quality);
+    },
+
+    /* ---------- Donnees : payload exact ---------- */
+    _fromPayload(p) {
+        const grille = Array.isArray(p.grille) ? p.grille.map(g => ({
+            categorie: g.categorie || '', item: g.item || '', resultat: g.resultat || '', commentaire: g.commentaire || ''
+        })) : [];
+        return {
+            id: p.id ?? null,
+            type: p.type || 'chantier',
+            scenario: p.scenario || '',
+            date: p.date || '',
+            site: p.site || '',
+            conducteurId: p.conducteurId ?? null,
+            conducteurNom: p.conducteurNom || '',
+            observeNom: p.observeNom || '',
+            grille,
+            pointsAmelioration: p.pointsAmelioration || '',
+            bonnesPratiques: p.bonnesPratiques || '',
+            observations: p.observations || '',
+            actionsVmc: Array.isArray(p.actionsVmc) ? p.actionsVmc : [],
+            photosMeta: Array.isArray(p.photosMeta) ? p.photosMeta : [],
+            createdAt: p.createdAt || ''
+        };
+    },
+
+    /* ---------- Donnees : relecture du texte (PDF sans payload) ---------- */
+    _fromText(pages, warnings) {
+        const all = pages.flatMap(pg => pg.texts);
+        const sameLine = (a, b) => a.page === b.page && Math.abs(a.y - b.y) < 2;
+        const clean = s => String(s || '').replace(/\s+/g, ' ').trim();
+        const isLabel = t => /:\s*$/.test(t.str.trim());
+
+        // Valeur a droite d'un libelle « Xxx : », jusqu'au libelle suivant de la ligne
+        const valueAfter = label => {
+            const lab = all.find(t => clean(t.str) === label);
+            if (!lab) return '';
+            const cands = all
+                .filter(t => t !== lab && sameLine(t, lab) && t.x > lab.x + 1)
+                .sort((a, b) => a.x - b.x);
+            const parts = [];
+            for (const c of cands) { if (isLabel(c)) break; parts.push(c.str); }
+            const v = clean(parts.join(' '));
+            return v === '-' ? '' : v;
+        };
+        const toISO = fr => {
+            const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(clean(fr));
+            return m ? `${m[3]}-${m[2]}-${m[1]}` : '';
+        };
+
+        const data = {
+            id: null,
+            type: valueAfter('Type :') || 'chantier',
+            scenario: valueAfter('Scénario :'),
+            date: toISO(valueAfter('Date :')),
+            site: valueAfter('Site :'),
+            conducteurId: null,
+            conducteurNom: valueAfter('Observateur :'),
+            observeNom: valueAfter('Personne observée :'),
+            grille: [],
+            pointsAmelioration: '',
+            bonnesPratiques: '',
+            observations: '',
+            actionsVmc: [],
+            photosMeta: [],
+            createdAt: ''
+        };
+
+        // Bornes des sections (titres) par page, pour arreter la lecture des tableaux
+        const SECTION_TITLES = ['Remarques générales', "Points d'amélioration", 'Bonnes pratiques',
+            'Actions à mettre en œuvre', 'Signature observateur :', 'Signature observé :'];
+        const isSectionTitle = t => {
+            const s = clean(t.str);
+            return SECTION_TITLES.includes(s) || s.startsWith('Photos terrain (') || s.includes('Suivi VMC | Généré le');
+        };
+
+        /* Lecture generique d'un tableau autotable : `anchorCol` est la colonne dont
+           chaque cellule tient sur une ligne et n'est jamais vide (elle definit les
+           lignes) ; les autres cellules (multi-lignes) sont rattachees a la ligne
+           commencant a la meme hauteur ou juste au-dessus (valign top). */
+        const readTable = (headers, anchorIdx, anchorRe) => {
+            const rows = [];
+            let lastRow = null;
+            for (const pg of pages) {
+                // En-tete (repete sur chaque page par autotable)
+                const first = pg.texts.find(t => clean(t.str) === headers[0]);
+                if (!first) continue;
+                const head = headers.map(hd => pg.texts.find(t => clean(t.str) === hd && sameLine(t, first)));
+                if (head.some(h => !h)) continue;
+                const endY = Math.min(...pg.texts.filter(t => t.y > first.y + 2 && isSectionTitle(t)).map(t => t.y), Infinity);
+                const body = pg.texts.filter(t => t.y > first.y + 2 && t.y < endY - 1);
+                // Bornes de colonnes : debut de cellule = x du titre (moins la marge de
+                // centrage de la colonne « Res. »/« N° » : 14 pt de tolerance).
+                const starts = head.map(h => h.x - (h === head[anchorIdx] ? 14 : 2));
+                const colOf = t => { let c = -1; for (let i = 0; i < starts.length; i++) if (t.x >= starts[i]) c = i; return c; };
+                const anchors = body.filter(t => colOf(t) === anchorIdx && anchorRe.test(clean(t.str)))
+                    .sort((a, b) => a.y - b.y);
+                const pageRows = anchors.map(a => ({ y: a.y, cells: headers.map(() => []), anchor: clean(a.str) }));
+                for (const t of body) {
+                    const c = colOf(t);
+                    if (c < 0) continue;
+                    if (c === anchorIdx && anchorRe.test(clean(t.str))) continue;
+                    let row = null;
+                    for (const r of pageRows) { if (r.y <= t.y + 1.5) row = r; else break; }
+                    row = row || lastRow;         // ligne coupee par un saut de page
+                    if (row) row.cells[c].push(t);
+                }
+                for (const r of pageRows) rows.push(r);
+                if (pageRows.length) lastRow = pageRows[pageRows.length - 1];
+            }
+            return rows.map(r => ({
+                anchor: r.anchor,
+                cells: r.cells.map(lines => clean(lines.sort((a, b) => a.y - b.y || a.x - b.x).map(t => t.str).join(' ')))
+            }));
+        };
+
+        // Grille de controle
+        const grilleRows = readTable(['Catégorie', 'Item', 'Res.', 'Commentaire'], 2, /^(OK|NOK|NA|-)$/);
+        data.grille = grilleRows.map(r => ({
+            categorie: r.cells[0], item: r.cells[1],
+            resultat: r.anchor === '-' ? '' : r.anchor,
+            commentaire: r.cells[3]
+        }));
+
+        // Remarques generales : deux colonnes de texte sous leurs titres
+        const readColumn = (title, left) => {
+            const t0 = all.find(t => clean(t.str) === title);
+            if (!t0) return '';
+            const pg = pages[t0.page - 1];
+            const endY = Math.min(...pg.texts.filter(t => t.y > t0.y + 2 && isSectionTitle(t) && !SECTION_TITLES.slice(1, 3).includes(clean(t.str))).map(t => t.y), Infinity);
+            const lines = pg.texts.filter(t => t.y > t0.y + 2 && t.y < endY - 1 && (left ? t.x < pg.w / 2 : t.x >= pg.w / 2))
+                .sort((a, b) => a.y - b.y || a.x - b.x);
+            return clean(lines.map(t => t.str).join(' '));
+        };
+        data.pointsAmelioration = readColumn("Points d'amélioration", true);
+        data.bonnesPratiques    = readColumn('Bonnes pratiques', false);
+
+        // Actions a mettre en oeuvre
+        const actRows = readTable(['N°', 'Actions', 'Responsable', 'Délai'], 0, /^\d+$/);
+        data.actionsVmc = actRows.map(r => ({
+            description: r.cells[1], responsable: r.cells[2], delai: toISO(r.cells[3]) || ''
+        })).filter(a => a.description);
+
+        // Controle de coherence avec le score imprime
+        const score = /(\d+)\s*OK\s*\/\s*(\d+)\s*NOK/.exec(valueAfter('Score :'));
+        if (score) {
+            const ok = data.grille.filter(g => g.resultat === 'OK').length;
+            const ko = data.grille.filter(g => g.resultat === 'NOK').length;
+            if (ok !== Number(score[1]) || ko !== Number(score[2])) {
+                warnings.push(`Score relu (${ok} OK / ${ko} NOK) différent du score imprimé (${score[1]} OK / ${score[2]} NOK) : vérifier la grille.`);
+            }
+        }
+        if (data.pointsAmelioration || data.bonnesPratiques) {
+            warnings.push('Remarques relues depuis le texte du PDF (5 lignes max par colonne dans le rapport).');
+        }
+        return data;
+    },
+
+    /* ---------- Correspondance observateur ---------- */
+    _norm(s) {
+        return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    },
+    _matchConducteur(conducteurs, data) {
+        if (data.conducteurId != null) {
+            const byId = conducteurs.find(c => c.id === data.conducteurId);
+            if (byId && (!data.conducteurNom || this._norm(byId.nom) === this._norm(data.conducteurNom))) return byId;
+        }
+        const n = this._norm(data.conducteurNom);
+        if (!n) return null;
+        return conducteurs.find(c => this._norm(c.nom) === n)
+            || conducteurs.find(c => this._norm(c.nom).split(' ').sort().join(' ') === n.split(' ').sort().join(' '))
+            || null;
+    },
+
+    /* ---------- UI (Parametres > Donnees) ---------- */
+    _esc(s) {
+        return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    },
+
+    async handleFile(file) {
+        const status = document.getElementById('pdf-import-status');
+        const preview = document.getElementById('pdf-import-preview');
+        this._pending = null;
+        preview.classList.add('d-none');
+        preview.innerHTML = '';
+        if (!file) return;
+        status.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Lecture du PDF…';
+        try {
+            const result = await this.parse(file);
+            this._pending = result;
+            await this.renderPreview(result, preview);
+            status.textContent = '';
+            preview.classList.remove('d-none');
+        } catch (e) {
+            console.error('PdfImport:', e);
+            status.innerHTML = `<span class="text-danger">Lecture impossible : ${this._esc(e.message || e)}</span>`;
+        }
+    },
+
+    async renderPreview(r, container) {
+        const d = r.data;
+        const conducteurs = await DB.getConducteurs();
+        const match = this._matchConducteur(conducteurs, d);
+        const fmt = iso => iso ? iso.split('-').reverse().join('/') : '-';
+        const ok = d.grille.filter(g => g.resultat === 'OK').length;
+        const ko = d.grille.filter(g => g.resultat === 'NOK').length;
+        const nc = d.grille.length - ok - ko;
+        const warnings = [...r.warnings];
+        if (!match) warnings.push(`Observateur « ${d.conducteurNom || '?'} » non trouvé dans la liste : choisissez-le ci-dessous.`);
+
+        // Doublon probable : meme observateur, meme date
+        let doublon = null;
+        if (match && d.date) {
+            const vmcs = await DB.getVmcs({ conducteurId: match.id });
+            doublon = vmcs.find(v => v.date === d.date && (d.id == null || v.id === d.id || v.site === d.site)) || null;
+        }
+
+        const options = conducteurs.map(c =>
+            `<option value="${c.id}" ${match && c.id === match.id ? 'selected' : ''}>${this._esc(c.nom)}${c.agence ? ' (' + this._esc(c.agence) + ')' : ''}</option>`).join('');
+        const photosHtml = r.photos.length
+            ? r.photos.map(p => `<img src="${p.dataUrl}" class="rounded border" style="height:70px;width:auto" alt="photo">`).join('')
+            : '<span class="text-muted">aucune</span>';
+        const sig = (dataUrl, label) => dataUrl
+            ? `<div class="me-3 text-center"><div class="small text-muted">${label}</div><img src="${dataUrl}" class="border rounded bg-white" style="height:45px;width:auto" alt="${label}"></div>`
+            : `<div class="me-3 text-center"><div class="small text-muted">${label}</div><span class="text-muted small">absente</span></div>`;
+
+        container.innerHTML = `
+            <div class="alert ${r.source === 'payload' ? 'alert-success' : 'alert-secondary'} py-2 small mb-2">
+                ${r.source === 'payload'
+                    ? '✅ Données intégrées au PDF retrouvées : restauration exacte de la saisie.'
+                    : 'ℹ️ PDF sans données intégrées (ancienne version) : relecture du texte imprimé, à vérifier avant création.'}
+            </div>
+            ${warnings.length ? `<div class="alert alert-warning py-2 small mb-2"><ul class="mb-0 ps-3">${warnings.map(w => `<li>${this._esc(w)}</li>`).join('')}</ul></div>` : ''}
+            ${doublon ? `<div class="alert alert-danger py-2 small mb-2">⚠️ Une VMC de cet observateur existe déjà à cette date (<a href="#vmc-edit/${doublon.id}">VMC #${doublon.id}</a>, ${this._esc(doublon.site || '')}). Créer quand même produira un doublon.</div>` : ''}
+            <div class="row g-2 small">
+                <div class="col-md-6">
+                    <table class="table table-sm mb-0">
+                        <tr><th class="w-25">Type</th><td>${this._esc(d.type)}${d.scenario ? ' — ' + this._esc(d.scenario) : ''}</td></tr>
+                        <tr><th>Date</th><td>${fmt(d.date)}</td></tr>
+                        <tr><th>Site</th><td>${this._esc(d.site) || '-'}</td></tr>
+                        <tr><th>Observé</th><td>${this._esc(d.observeNom) || '-'}</td></tr>
+                        <tr><th>Grille</th><td>${d.grille.length} item(s) — ${ok} OK / ${ko} NOK${nc ? ' / ' + nc + ' NC' : ''}</td></tr>
+                        <tr><th>Actions</th><td>${d.actionsVmc.length}</td></tr>
+                    </table>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label mb-1">Observateur</label>
+                    <select class="form-select form-select-sm mb-2" id="pdf-import-conducteur">
+                        <option value="">— choisir —</option>${options}
+                    </select>
+                    <div class="mb-1 text-muted">Photos (${r.photos.length})</div>
+                    <div class="d-flex flex-wrap gap-1 mb-2">${photosHtml}</div>
+                    <div class="d-flex">${sig(r.sigObs, 'Signature observateur')}${sig(r.sigObe, 'Signature observé')}</div>
+                </div>
+            </div>
+            <div class="mt-3 d-flex gap-2 align-items-center">
+                <button type="button" class="btn btn-success btn-sm text-nowrap flex-shrink-0" id="btn-pdf-import-create">✅ Créer la VMC</button>
+                <span class="text-muted small">La VMC est enregistrée puis sauvegardée sur SharePoint. Le PDF n'est pas redéposé dans PDF_envois (pas de nouvel email).</span>
+            </div>`;
+        document.getElementById('btn-pdf-import-create').onclick = () => this.create();
+    },
+
+    async create() {
+        const r = this._pending;
+        if (!r) return;
+        const btn = document.getElementById('btn-pdf-import-create');
+        const conducteurId = Number(document.getElementById('pdf-import-conducteur')?.value);
+        if (!conducteurId) { showToast("Choisissez l'observateur", 'warning'); return; }
+        if (!r.data.date) { showToast('Date de la VMC introuvable dans le PDF', 'danger'); return; }
+        btn.disabled = true;
+        try {
+            const cond = await DB.getConducteur(conducteurId);
+            const d = r.data;
+            const now = new Date().toISOString();
+            const grille = d.grille.map(g => ({ categorie: g.categorie, item: g.item, resultat: g.resultat, commentaire: g.commentaire }));
+            const data = {
+                type: d.type || 'chantier',
+                scenario: d.scenario || '',
+                date: d.date,
+                site: d.site || '',
+                conducteurId,
+                conducteurNom: cond?.nom || d.conducteurNom || '',
+                observeNom: d.observeNom || '',
+                scoreOk: grille.filter(g => g.resultat === 'OK').length,
+                scoreKo: grille.filter(g => g.resultat === 'NOK').length,
+                scoreNc: grille.filter(g => g.resultat === '' || g.resultat === 'NA').length,
+                grille,
+                pointsAmelioration: d.pointsAmelioration || '',
+                bonnesPratiques: d.bonnesPratiques || '',
+                actionsVmc: d.actionsVmc || [],
+                observations: d.observations || d.pointsAmelioration || '',
+                photos: r.photos.map((p, i) => ({
+                    data: p.dataUrl,
+                    name: d.photosMeta?.[i]?.name || `VMC_${d.date}_photo_${i + 1}.jpg`,
+                    date: d.photosMeta?.[i]?.date || now
+                })),
+                signatureObservateur: r.sigObs || null,
+                signatureObserve: r.sigObe || null,
+                createdAt: d.createdAt || `${d.date}T12:00:00.000Z`,
+                updatedAt: now,
+                restaureDepuisPdf: { fichier: r.fileName, source: r.source, le: now, idOrigine: d.id ?? null }
+            };
+            const vmcId = await DB.putVmc(data);
+            await VmcFormPage._linkToPlanning(data, vmcId);
+            for (const action of data.actionsVmc) {
+                if (!action.description) continue;
+                await DB.putAction({
+                    vmcId, description: action.description, responsable: action.responsable || '',
+                    delai: action.delai || null, statut: 'A faire', commentaire: '', createdAt: now, updatedAt: now
+                });
+            }
+            if (DataSync._connected) {
+                await DataSync.save({ manual: true });
+                showToast(`VMC #${vmcId} restaurée et sauvegardée`);
+            } else {
+                showToast(`VMC #${vmcId} restaurée localement (non connecté : sauvegarde SharePoint à faire)`, 'warning');
+            }
+            this._pending = null;
+            location.hash = '#vmc-edit/' + vmcId;
+        } catch (e) {
+            console.error('PdfImport.create:', e);
+            showToast('Erreur lors de la création : ' + (e.message || e), 'danger');
+            btn.disabled = false;
+        }
+    }
+};
 </script>
 
 <!-- js\remarques.js -->
