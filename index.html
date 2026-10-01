@@ -2389,7 +2389,13 @@ const DB = {
     },
     getConducteur(id)       { return db.conducteurs.get(id); },
     putConducteur(data)     { return db.conducteurs.put(data).then(r => { DataSync.markDirty(); return r; }); },
-    deleteConducteur(id)    { return db.conducteurs.delete(id).then(r => { DataSync.markDirty(); return r; }); },
+    deleteConducteur(id)    { return db.conducteurs.delete(id).then(r => this._siVide('conducteurs', r)).then(r => { DataSync.markDirty(); return r; }); },
+
+    // Suppression du DERNIER enregistrement d'une table : vidage voulu, a signaler au
+    // garde « table vide » de DataSync.save (sinon la sauvegarde serait refusee).
+    _siVide(store, r) {
+        return db[store].count().then(n => { if (!n) DataSync.autoriserVidage(); return r; });
+    },
 
     /* --- Visites --- */
     async getVisites(filters = {}) {
@@ -2403,7 +2409,7 @@ const DB = {
     },
     getVisite(id)            { return db.visites.get(id); },
     putVisite(data)          { return db.visites.put(data).then(r => { DataSync.markDirty(); return r; }); },
-    deleteVisite(id)         { return db.visites.delete(id).then(r => { DataSync.markDirty(); return r; }); },
+    deleteVisite(id)         { return db.visites.delete(id).then(r => this._siVide('visites', r)).then(r => { DataSync.markDirty(); return r; }); },
 
     /* --- VMCs --- */
     async getVmcs(filters = {}) {
@@ -2425,7 +2431,7 @@ const DB = {
         });
     },
     deleteVmc(id)            {
-        return db.vmcs.delete(id).then(r => {
+        return db.vmcs.delete(id).then(r => this._siVide('vmcs', r)).then(r => {
             DataSync.markDirty();
             if (typeof ActivityLog !== 'undefined') ActivityLog.log('vmc.delete', { id });
             return r;
@@ -2453,7 +2459,7 @@ const DB = {
         });
     },
     deleteAction(id)         {
-        return db.actions.delete(id).then(r => {
+        return db.actions.delete(id).then(r => this._siVide('actions', r)).then(r => {
             DataSync.markDirty();
             if (typeof ActivityLog !== 'undefined') ActivityLog.log('action.delete', { id });
             return r;
@@ -3451,6 +3457,29 @@ async function _downloadFileAsDataURL(filePath) {
 /* ==============================================================
    DataSync – meme interface que l'original, backend Graph API
    ============================================================== */
+/* --- Invariants de la fusion (v51, portes de SuiviEPI v8 / SuiviPDP) : a ne jamais casser ---
+   1. Une fiche deja connue a distance n'est jamais clonee. Dans _mergeWithRemote, un
+      enregistrement « ajoute localement » (absent du snapshot) dont l'id existe a distance :
+      contenu identique → version distante gardee ; meme fiche (_memeFiche : empreinte de
+      creation) → fusion champ a champ sans reference (_mergeSansReference : le plus recent
+      par updatedAt/createdAt, sinon la version DISTANTE) ; deux fiches distinctes sous le
+      meme id entier (creees par deux postes) → renumerotage + correction des cles
+      etrangeres des enregistrements locaux (BUG #13 / #20), comme avant.
+   2. Le snapshot (reference de fusion) est un jeu de donnees precis (_setSnapshot) : le
+      fichier distant lu ou les donnees poussees, jamais une relecture de la base quand un
+      echange distant est en jeu, et jamais une base modifiee non synchronisee.
+   3. Le drapeau (_dirty / _dirtyFlag) ne se baisse que si rien n'a ete saisi entre-temps
+      (_dirtyGen, incremente par markDirty). Pas d'await entre le test et la baisse.
+   4. Modifications en attente → fusion, jamais remplacement (_loadFromRemote), quelle que
+      soit la version distante.
+   5. Garde-fous avant toute ecriture : volume (_assertNoMergeExplosion, contournement a
+      usage unique DataSync.autoriserProchainMerge()) et « table vide » (save, vidage
+      volontaire = autoriserVidage). Apres un refus : pas de reprise automatique
+      (_guardBlocked) ; une saisie ou le bouton Sauvegarder relancent une tentative.
+   6. Le base64 local des photos externalisees est un cache : ignore dans toutes les
+      comparaisons (_cmp / _fieldStr), absent du snapshot, toujours reinjecte apres fusion.
+   7. Ordre des stores : conducteurs, visites, vmcs, actions, config (remap des cles
+      etrangeres en fin de fusion). */
 const DataSync = {
 
     _escHtml(str) {
@@ -3460,6 +3489,9 @@ const DataSync = {
     /* --- Etat interne --- */
     _connected: false,          // remplace _dirHandle (utilise comme booleen)
     _dirty: false,
+    _dirtyGen: 0,               // incremente par markDirty : detecte une saisie faite pendant une ecriture
+    _guardBlocked: false,       // un garde-fou a refuse la derniere sauvegarde : plus de reprise automatique
+    _mergeRequired: false,      // fusion de demarrage refusee : a refaire a la prochaine sauvegarde
     _saveTimer: null,
     _saving: false,
     _loadedMeta: null,
@@ -3580,6 +3612,13 @@ const DataSync = {
                     this._loadedSnapshot = snapConfig.value;
                 }
             } catch { /* ignore */ }
+            // Modifications en attente d'une session precedente : le drapeau en memoire doit
+            // le savoir des le demarrage (pas de snapshot fabrique a partir de cette base,
+            // reprise de la sauvegarde au retour du reseau ou au prochain polling).
+            try {
+                const f = await db.config.get('_dirtyFlag');
+                if (f && f.value) { this._dirty = true; this._updateBadge(true); }
+            } catch { /* ignore */ }
             return true;
         }
 
@@ -3619,10 +3658,13 @@ const DataSync = {
             const data = await _readJsonFile(filePath);
             if (!data || !data._meta) return false;
 
-            // BUG #10 — au boot, si des modifications locales etaient en attente de flush
-            // (flag persiste) ET que le remote a une version plus recente que notre dernier
-            // sync, on FUSIONNE au lieu d'ecraser la base locale (sinon perte des saisies
-            // faites hors-ligne ou juste avant un reload).
+            // BUG #10 — au boot ou a la connexion, si des modifications locales etaient en
+            // attente de flush (flag persiste), on FUSIONNE au lieu d'ecraser la base locale,
+            // quelle que soit la version distante : egale (une saisie hors connexion n'a fait
+            // bouger aucune version) ou anterieure (fichier restaure : les saisies en attente
+            // ne doivent pas disparaitre pour autant). Sans snapshot (perdu), la fusion part
+            // d'une reference vide : tout le local est vu comme « ajoute », ce qui ne clone
+            // plus rien (cf. _mergeWithRemote, fiche deja connue a distance).
             let dirtyPersisted = false;
             try {
                 const f = await db.config.get('_dirtyFlag');
@@ -3631,15 +3673,35 @@ const DataSync = {
             const remoteVersion = data._meta.version || 0;
             const localVersion  = this._loadedMeta?.version || 0;
 
-            if ((dirtyPersisted || this._dirty) && remoteVersion > localVersion && this._loadedSnapshot) {
+            if (dirtyPersisted || this._dirty) {
                 console.log(`DataSync: boot avec modifs locales en attente → fusion (remote v${remoteVersion} vs local v${localVersion})`);
-                const merged = await this._mergeWithRemote(data);
+                let merged;
+                try {
+                    merged = await this._mergeWithRemote(data);
+                } catch (e) {
+                    if (!e?.isMergeGuard) throw e;
+                    // Fusion refusee par le garde-fou de volume : rien n'est ecrit, ni ici ni a
+                    // distance. Le fichier distant existe : pas de « premiere sauvegarde ». La
+                    // prochaine sauvegarde devra refaire cette fusion, meme a versions egales
+                    // (sinon elle pousserait la base locale telle quelle par-dessus le distant).
+                    this._mergeRequired = true;
+                    this._dirty = true;
+                    this._updateBadge(true);
+                    return true;
+                }
                 await this._writeLocalData(merged);
                 this._loadedMeta = data._meta;
                 this._lastSavedAt = data._meta.lastSaved || null;
                 this._dirty = true;
                 this._updateBadge(true);
-                await this._captureSnapshot();
+                try { await db.config.put({ id: '_dirtyFlag', value: true }); } catch { /* ignore */ }
+                // Base de comparaison = le fichier distant tel que lu, pas la base fusionnee :
+                // tant que l'ecriture ci-dessous n'a pas abouti (echec, 412 rejoue), la fusion
+                // suivante doit encore voir les saisies locales comme des ajouts a pousser.
+                await this._setSnapshot(data);
+                if (typeof ActivityLog !== 'undefined') {
+                    ActivityLog.log('fusion', { avec: data._meta.savedBy || '', version: remoteVersion, contexte: 'demarrage' });
+                }
                 // Repousser le resultat fusionne sur SharePoint pour ne pas le perdre.
                 try { await this.save(); } catch (e) { console.warn('DataSync: save post-merge boot echoue', e); }
                 return true;
@@ -3688,6 +3750,7 @@ const DataSync = {
 
     async _applyRemoteData(data) {
         if (!data) return;
+        const genAtStart = this._dirtyGen;   // saisie pendant le remplacement : cf. plus bas
         this._loadedMeta = data._meta || null;
         this._lastSavedAt = data._meta?.lastSaved || null;
 
@@ -3696,11 +3759,12 @@ const DataSync = {
         if (Array.isArray(data.vmcs)) this._reinjectLocalPhotoData(data.vmcs, _photoDataMap);
 
         // Le remote ne contient plus les cles de config internes (filtrees) : on les
-        // preserve a travers le clear() pour ne pas perdre meta/snapshot.
-        const keepInternal = (await db.config.toArray())
-            .filter(c => this._INTERNAL_CONFIG_IDS.includes(c.id));
-
+        // preserve a travers le clear() pour ne pas perdre meta/snapshot. Elles sont lues
+        // DANS la transaction : lues avant, un _dirtyFlag perime (faux) serait reecrit
+        // par-dessus celui qu'une saisie vient de lever.
         await db.transaction('rw', db.conducteurs, db.visites, db.vmcs, db.actions, db.config, async () => {
+            const keepInternal = (await db.config.toArray())
+                .filter(c => this._INTERNAL_CONFIG_IDS.includes(c.id));
             await db.conducteurs.clear();
             await db.visites.clear();
             await db.vmcs.clear();
@@ -3714,14 +3778,21 @@ const DataSync = {
             if (keepInternal.length)      await db.config.bulkPut(keepInternal);
         });
 
-        this._dirty = false;
-        this._updateBadge(false);
-        // BUG #10 — on applique le remote : plus de modifs locales en attente.
-        try {
-            await db.config.put({ id: '_syncMeta', value: data._meta });
-            await db.config.put({ id: '_dirtyFlag', value: false });
-        } catch { /* ignore */ }
-        await this._captureSnapshot();
+        try { await db.config.put({ id: '_syncMeta', value: data._meta }); } catch { /* ignore */ }
+        // Reference de fusion = le fichier distant applique, pas une relecture de la base :
+        // une saisie enregistree pendant le remplacement doit rester un ajout a pousser.
+        await this._setSnapshot(data);
+        // BUG #10 — on applique le remote : plus de modifs locales en attente, SAUF si une
+        // saisie est survenue entre-temps (elle serait « deja synchronisee » sans avoir
+        // jamais ete envoyee). Pas d'await entre le test et la baisse du drapeau.
+        if (this._dirtyGen === genAtStart) {
+            this._dirty = false;
+            this._updateBadge(false);
+            try { await db.config.put({ id: '_dirtyFlag', value: false }); } catch { /* ignore */ }
+        } else {
+            // saisie pendant le remplacement : le drapeau persiste doit rester leve
+            try { await db.config.put({ id: '_dirtyFlag', value: true }); } catch { /* ignore */ }
+        }
     },
 
     /* ================================================================
@@ -3730,6 +3801,7 @@ const DataSync = {
     // Cles de config internes (locales) a ne JAMAIS pousser au remote ni inclure
     // dans le snapshot (sinon récursion/gonflement et faux diffs au merge).
     _INTERNAL_CONFIG_IDS: ['_syncMeta', '_snapshot', '_dirtyFlag'],
+    _SYNC_STORES: ['conducteurs', 'visites', 'vmcs', 'actions', 'config'],
 
     async _collectRawData() {
         const config = (await db.config.toArray())
@@ -3743,25 +3815,40 @@ const DataSync = {
         };
     },
 
+    // Relecture de la base : reservee au demarrage d'un poste SANS modification en attente
+    // (sinon les saisies non envoyees deviendraient « deja synchronisees »).
     async _captureSnapshot() {
         try {
-            const raw = await this._collectRawData();
-            this._loadedSnapshot = JSON.stringify(raw);
-            // BUG #10 — persister le snapshot pour qu'un merge post-reload ne parte
-            // pas d'un snapshot vide (sinon toute la base locale serait vue comme "ajoutee").
-            try {
-                await db.config.put({ id: '_snapshot', value: this._loadedSnapshot });
-            } catch (e2) { console.warn('DataSync: snapshot non persiste', e2); }
+            await this._setSnapshot(await this._collectRawData());
         } catch (e) {
             console.warn('DataSync: impossible de capturer le snapshot', e);
             this._loadedSnapshot = null;
         }
     },
 
+    /* Reference de fusion posee a partir d'un jeu de donnees precis (fichier distant lu
+       ou donnees poussees). A preferer a _captureSnapshot des qu'une ecriture ou une
+       lecture distante est en jeu : une relecture de la base ferait entrer dans la
+       reference une saisie concurrente jamais envoyee. Le cache base64 des photos
+       externalisees n'y entre pas (meme forme que le fichier distant). */
+    async _setSnapshot(data) {
+        const raw = {};
+        for (const s of this._SYNC_STORES) raw[s] = data[s] || [];
+        raw.vmcs = this._stripPhotosForRemote(raw.vmcs);
+        raw.config = raw.config.filter(c => !this._INTERNAL_CONFIG_IDS.includes(c.id));
+        this._loadedSnapshot = JSON.stringify(raw);
+        // BUG #10 — persister le snapshot pour qu'un merge post-reload ne parte
+        // pas d'un snapshot vide (sinon toute la base locale serait vue comme "ajoutee").
+        try {
+            await db.config.put({ id: '_snapshot', value: this._loadedSnapshot });
+        } catch (e2) { console.warn('DataSync: snapshot non persiste', e2); }
+    },
+
     async _writeLocalData(data) {
-        const keepInternal = (await db.config.toArray())
-            .filter(c => this._INTERNAL_CONFIG_IDS.includes(c.id));
         await db.transaction('rw', db.conducteurs, db.visites, db.vmcs, db.actions, db.config, async () => {
+            // cles internes lues DANS la transaction (cf. _applyRemoteData)
+            const keepInternal = (await db.config.toArray())
+                .filter(c => this._INTERNAL_CONFIG_IDS.includes(c.id));
             await db.conducteurs.clear();
             await db.visites.clear();
             await db.vmcs.clear();
@@ -3804,9 +3891,10 @@ const DataSync = {
         let conflictFields = null;
 
         for (const k of keys) {
-            const sv = JSON.stringify(snap[k]);
-            const lv = JSON.stringify(loc[k]);
-            const rv = JSON.stringify(rem[k]);
+            // comparaison insensible a l'ordre des cles et au cache base64 des photos
+            const sv = this._fieldStr(k, snap[k]);
+            const lv = this._fieldStr(k, loc[k]);
+            const rv = this._fieldStr(k, rem[k]);
             const changedLocal  = lv !== sv;
             const changedRemote = rv !== sv;
 
@@ -3832,6 +3920,151 @@ const DataSync = {
             });
         }
         return out;
+    },
+
+    // Serialisation a cles triees : un enregistrement relu de Dexie et sa copie venue du
+    // fichier distant n'ont pas forcement leurs cles dans le meme ordre.
+    _stableStringify(v) {
+        if (v === undefined) return 'null';
+        if (Array.isArray(v)) return '[' + v.map(x => this._stableStringify(x)).join(',') + ']';
+        if (v && typeof v === 'object') return '{' + Object.keys(v).sort().map(k => JSON.stringify(k) + ':' + this._stableStringify(v[k])).join(',') + '}';
+        return JSON.stringify(v);
+    },
+
+    // Photos telles qu'elles partent a distance : { id, name, path } des qu'un path existe
+    // (cf. _stripPhotosForRemote). Le base64 local (cache d'affichage) ne doit jamais
+    // faire croire a une modification.
+    _photosForCompare(photos) {
+        return photos.map(p => (p && p.path) ? { id: p.id, name: p.name, path: p.path } : p);
+    },
+
+    // Valeur comparable d'un champ (undefined reste distinct de null, comme JSON.stringify)
+    _fieldStr(k, v) {
+        if (v === undefined) return undefined;
+        if (k === 'photos' && Array.isArray(v)) v = this._photosForCompare(v);
+        return this._stableStringify(v);
+    },
+
+    // Contenu comparable d'un enregistrement entier
+    _cmp(store, rec) {
+        if (rec && store === 'vmcs' && Array.isArray(rec.photos)) rec = { ...rec, photos: this._photosForCompare(rec.photos) };
+        return this._stableStringify(rec);
+    },
+
+    /**
+     * Meme id des deux cotes, contenu different, fiche absente du snapshot : est-ce la MEME
+     * fiche (copie divergente, snapshot perdu ou perime) ou deux fiches DISTINCTES creees
+     * par deux postes sous le meme id entier (auto-increment, max + 1) ?
+     * Empreinte de creation :
+     *  - vmcs, actions : createdAt (fige a la creation, conserve par l'import Excel et la
+     *    restauration PDF) ; VMC anciennes sans createdAt : date + observateur ;
+     *  - visites : observateur + annee + mois (cle naturelle, cf. import Excel) ;
+     *  - conducteurs : nom (casse/espaces ignores) ou courriel ;
+     *  - config : l'id EST la cle (toujours la meme fiche).
+     * Pas d'empreinte exploitable → false : renumerotage historique, le garde-fou de
+     * volume reste le filet.
+     * condRemap : observateurs locaux deja renumerotes dans cette fusion (les conducteurs
+     * sont traites en premier) — l'observateur LOCAL n° X renumerote n'est pas
+     * l'observateur DISTANT n° X : leurs visites sont des fiches distinctes.
+     */
+    _memeFiche(store, loc, rem, condRemap) {
+        const n = s => (s == null ? '' : String(s)).trim().toLowerCase();
+        const locCond = (condRemap && condRemap[loc.conducteurId] != null) ? condRemap[loc.conducteurId] : loc.conducteurId;
+        if (store === 'config') return true;
+        if (store === 'vmcs' || store === 'actions') {
+            if (loc.createdAt || rem.createdAt) return loc.createdAt === rem.createdAt;
+            return store === 'vmcs' && !!loc.date && loc.date === rem.date
+                && locCond != null && locCond === rem.conducteurId;
+        }
+        if (store === 'visites') {
+            return locCond != null && locCond === rem.conducteurId
+                && loc.annee != null && loc.annee === rem.annee
+                && loc.mois != null && loc.mois === rem.mois;
+        }
+        if (store === 'conducteurs') {
+            return (!!n(loc.nom) && n(loc.nom) === n(rem.nom)) || (!!n(loc.email) && n(loc.email) === n(rem.email));
+        }
+        return false;
+    },
+
+    /**
+     * Fusion champ a champ SANS reference : meme fiche des deux cotes, contenu different,
+     * et aucun etat commun connu (snapshot vide ou perime). Un champ present d'un seul
+     * cote est conserve ; un champ different des deux cotes va a la version la plus
+     * recente (updatedAt, sinon createdAt). Egalite ou absence de date → version DISTANTE,
+     * a l'inverse de _mergeRecord : sans reference, rien ne prouve que la copie locale
+     * soit une saisie, et le fichier partage fait foi.
+     * Renvoie { rec, champs (en conflit), local (true si la version locale l'emporte) }.
+     */
+    _mergeSansReference(loc, rem) {
+        const locTs = loc.updatedAt || loc.createdAt || '';
+        const remTs = rem.updatedAt || rem.createdAt || '';
+        const local = !!locTs && locTs > remTs;
+        const champs = Object.keys(loc).filter(k => k in rem && this._fieldStr(k, loc[k]) !== this._fieldStr(k, rem[k]));
+        return { rec: local ? { ...rem, ...loc } : { ...loc, ...rem }, champs, local };
+    },
+
+    /* ---- Garde-fou de volume (porte de SuiviPDP, incident de duplication du 21/08) ----
+       Filet de dernier recours, independant de la logique de fusion : une fusion saine
+       additionne au plus les fiches reellement ajoutees de part et d'autre ; un effectif
+       qui depasse max(local, distant) x 1,3 + 10 en un cycle est la signature d'un clonage.
+       La fusion est alors refusee avant toute ecriture (locale ou distante), _dirty est
+       conserve et les reprises automatiques sont suspendues (_guardBlocked).
+       Faux positif legitime (deux bases reellement distinctes a reunir) : taper
+       DataSync.autoriserProchainMerge() dans la console — usage unique. */
+    _MERGE_GUARD_STORES: ['conducteurs', 'visites', 'vmcs', 'actions'],
+    _MERGE_GUARD_RATIO: 1.3,
+    _MERGE_GUARD_MARGE: 10,
+    _mergeGuardBypassOnce: false,
+    autoriserProchainMerge() {
+        this._mergeGuardBypassOnce = true;
+        this._guardBlocked = false;
+        if (this._connected && this._dirty) {
+            clearTimeout(this._saveTimer);
+            this._saveTimer = setTimeout(() => this.save(), VMC_CONFIG.SAVE_DEBOUNCE_MS);
+        }
+        showToast('Prochaine synchronisation autorisée sans contrôle de volume. Vérifiez le nombre de VMC, de visites et d\'actions juste après.', 'warning', 9000);
+        return 'Garde-fou de volume désactivé pour la PROCHAINE synchronisation uniquement.';
+    },
+    _assertNoMergeExplosion(current, remoteData, merged) {
+        const n = a => (Array.isArray(a) ? a.length : 0);
+        const alertes = [];
+        for (const s of this._MERGE_GUARD_STORES) {
+            const base = Math.max(n(current[s]), n(remoteData[s]));
+            const plafond = Math.ceil(base * this._MERGE_GUARD_RATIO) + this._MERGE_GUARD_MARGE;
+            if (n(merged[s]) > plafond) alertes.push(`${s} ${n(current[s])} ici, ${n(remoteData[s])} à distance → ${n(merged[s])}`);
+        }
+        if (!alertes.length) return;
+        const detail = alertes.join(' ; ');
+        if (this._mergeGuardBypassOnce) {
+            // Autorisation ponctuelle : rendue a la premiere sauvegarde reussie (save), pour
+            // qu'un 412 rejoue pendant ce cycle ne retombe pas sur le garde-fou.
+            console.warn('DataSync: garde-fou de volume contourne (autorisation ponctuelle) —', detail);
+            if (typeof ActivityLog !== 'undefined') ActivityLog.log('garde_duplication_contournee', { detail });
+            return;
+        }
+        this._guardBlocked = true;
+        console.error('DataSync: fusion refusee (effectif anormal) —', detail);
+        showToast('Synchronisation bloquée par sécurité : la fusion multiplierait anormalement les enregistrements (' + this._escHtml(detail) + '). '
+            + 'Rien n\'a été écrit, vos données restent sur cet appareil. Prévenez l\'administrateur de l\'application.', 'danger', 30000);
+        if (typeof ActivityLog !== 'undefined') ActivityLog.log('garde_duplication_declenchee', { detail });
+        const err = new Error('Fusion refusee par le garde-fou de volume (' + detail + ')');
+        err.isMergeGuard = true;   // ni reprise automatique, ni message generique (cf. save)
+        throw err;
+    },
+
+    /* Vidage volontaire : autorise UNE sauvegarde a pousser une table vide par-dessus un
+       fichier distant qui ne l'est pas (cf. garde « table vide » de save). Posee par la
+       suppression du dernier enregistrement d'une table (DB.delete*) ; conservee en
+       localStorage (la suppression peut etre faite hors connexion), rendue a la premiere
+       sauvegarde reussie. */
+    VIDAGE_KEY: 'vmc_vidage_autorise',
+    autoriserVidage() {
+        try { localStorage.setItem(this.VIDAGE_KEY, '1'); } catch { /* ignore */ }
+        this._guardBlocked = false;
+    },
+    _vidageAutorise() {
+        try { return localStorage.getItem(this.VIDAGE_KEY) === '1'; } catch { return false; }
     },
 
     async _mergeWithRemote(remoteData) {
@@ -3864,6 +4097,7 @@ const DataSync = {
         // la VMC locale renumerotee). On memorise ici { rec, snap } des locaux.
         const localRefs = { visites: [], vmcs: [], actions: [] };
         const stores = ['conducteurs', 'visites', 'vmcs', 'actions', 'config'];
+        const sansRef = [];   // divergences arbitrees sans reference, journalisees en fin de fusion
 
         for (const store of stores) {
             const curArr  = current[store]  || [];
@@ -3879,7 +4113,7 @@ const DataSync = {
             for (const [id, entry] of curById) {
                 const snap = snapById.get(id);
                 if (!snap) localAdded.push(entry);
-                else if (JSON.stringify(snap) !== JSON.stringify(entry)) localUpdated.push(entry);
+                else if (this._cmp(store, snap) !== this._cmp(store, entry)) localUpdated.push(entry);
             }
             for (const id of snapById.keys()) {
                 if (!curById.has(id)) localDeletedIds.push(id);
@@ -3892,7 +4126,7 @@ const DataSync = {
                 const rem  = remoteById.get(id);
                 const snap = snapById.get(id);
                 if (rem === undefined) continue; // deja absent cote remote
-                if (JSON.stringify(rem) !== JSON.stringify(snap)) {
+                if (this._cmp(store, rem) !== this._cmp(store, snap)) {
                     // Conflit suppression locale vs modification distante → on garde le remote
                     if (typeof ActivityLog !== 'undefined') {
                         ActivityLog.log('conflit_delete_vs_update', { store, id });
@@ -3922,21 +4156,45 @@ const DataSync = {
             for (const id of remoteById.keys()) {
                 if (typeof id === 'number' && id >= nextId) nextId = id + 1;
             }
+            // « Ajoute localement » ne veut pas dire « nouveau » : avec un snapshot vide ou
+            // perime (copie d'une autre base sur un poste jamais synchronise, snapshot perdu),
+            // toute la base locale passe par ici. Une fiche deja connue a distance n'est
+            // JAMAIS reinseree sous un nouvel id (ce clonage a double la base de SuiviPDP a
+            // chaque rechargement le 21/08) : contenu identique → version distante gardee ;
+            // meme fiche (_memeFiche) → fusion champ a champ sans reference. Seules deux
+            // fiches reellement distinctes sous le meme id sont renumerotees (ci-dessous).
+            // posesIci : id occupes par un enregistrement LOCAL place (ou renumerote) dans cette
+            // boucle. Ce n'est pas une fiche distante : jamais de comparaison « meme fiche »
+            // avec lui (deux saisies locales de la meme milliseconde ne sont pas la meme
+            // fiche), seulement le renumerotage.
+            const posesIci = new Set();
             for (const entry of localAdded) {
+                const rem = remoteById.get(entry.id);
+                if (rem !== undefined && !posesIci.has(entry.id)) {
+                    if (this._cmp(store, rem) === this._cmp(store, entry)) continue;
+                    if (this._memeFiche(store, entry, rem, remap.conducteurs)) {
+                        const m = this._mergeSansReference(entry, rem);
+                        remoteById.set(entry.id, m.rec);
+                        // FK identique a celle du distant → heritee, jamais remappee (BUG #20)
+                        if (localRefs[store]) localRefs[store].push({ rec: m.rec, snap: rem });
+                        if (m.champs.length) sansRef.push({ store, id: entry.id, champs: m.champs.join(', '), resolution: m.local ? 'local' : 'distant' });
+                        continue;
+                    }
+                }
                 const newEntry = { ...entry };
                 if (localRefs[store]) localRefs[store].push({ rec: newEntry, snap: snapById.get(entry.id) || null });
                 // BUG #13 — Les conducteurs ont un id MANUEL (maxId+1) : on les inclut
                 // dans le remap de collision au meme titre que les stores auto-increment,
                 // pour ne perdre aucune creation concurrente et patcher les FK.
                 const needsRemap = (autoIdStores.has(store) || store === 'conducteurs');
-                if (needsRemap && remoteById.has(newEntry.id) &&
-                    JSON.stringify(remoteById.get(newEntry.id)) !== JSON.stringify(newEntry)) {
+                if (needsRemap && rem !== undefined) {
                     const oldId = newEntry.id;
                     while (remoteById.has(nextId)) nextId++;
                     newEntry.id = nextId++;
                     remap[store][oldId] = newEntry.id;
                 }
                 remoteById.set(newEntry.id, newEntry);
+                posesIci.add(newEntry.id);
             }
 
             merged[store] = Array.from(remoteById.values());
@@ -3961,6 +4219,25 @@ const DataSync = {
         if (Object.keys(remap.conducteurs).length) {
             patchFK(localRefs.vmcs, 'conducteurId', remap.conducteurs);
             patchFK(localRefs.visites, 'conducteurId', remap.conducteurs);
+        }
+
+        // Refus d'une fusion qui ferait exploser un effectif (leve isMergeGuard, rien n'est ecrit)
+        this._assertNoMergeExplosion(current, remoteData, merged);
+
+        // Divergences sans reference : arbitrees par date comme les autres conflits, mais
+        // signalees comme telles et sans message a l'ecran. Au-dela de 10, une ligne par
+        // table (une copie massive ne doit pas saturer la file du journal).
+        if (sansRef.length) console.warn('DataSync: divergences fusionnees sans reference', sansRef);
+        if (sansRef.length && typeof ActivityLog !== 'undefined') {
+            const reference = 'sans référence (fiche absente du dernier état synchronisé)';
+            if (sansRef.length <= 10) {
+                for (const c of sansRef) ActivityLog.log('conflit_merge', { ...c, reference });
+            } else {
+                for (const store of new Set(sansRef.map(c => c.store))) {
+                    const l = sansRef.filter(c => c.store === store), nLoc = l.filter(c => c.resolution === 'local').length;
+                    ActivityLog.log('conflit_merge', { store, nombre: l.length, resolution: `${nLoc} local, ${l.length - nLoc} distant`, reference });
+                }
+            }
         }
 
         // #15 — reinjecter le cache base64 local sur les photos externalisees.
@@ -4059,6 +4336,11 @@ const DataSync = {
             console.warn('DataSync: pas connecte, sauvegarde locale uniquement');
             return;
         }
+        // Un garde-fou a refuse la sauvegarde precedente : la cause ne disparait pas d'elle-meme,
+        // les reprises automatiques (polling, minuterie, retour du reseau) s'arretent. Une
+        // nouvelle saisie (markDirty), le bouton Sauvegarder ou une autorisation relancent.
+        if (this._guardBlocked && !opts.manual) return;
+        this._guardBlocked = false;
 
         this._saving = true;
         const filePath = `${VMC_CONFIG.DATA_FOLDER_PATH}/${VMC_CONFIG.DATA_FILE_NAME}`;
@@ -4104,7 +4386,7 @@ const DataSync = {
 
                 // 2. Si un autre utilisateur a sauvegarde entre-temps : fusionner
                 let baseVersion = lastSyncedVersion;
-                if (remoteData && remoteVersion > lastSyncedVersion) {
+                if (remoteData && (remoteVersion > lastSyncedVersion || this._mergeRequired)) {
                     console.log(`DataSync: fusion (remote v${remoteVersion} vs local v${lastSyncedVersion})`);
                     const merged = await this._mergeWithRemote(remoteData);
                     await this._writeLocalData(merged);
@@ -4118,9 +4400,27 @@ const DataSync = {
                 //    d'echec d'upload, le base64 reste en fallback (reessai au prochain save).
                 await this._externalizePhotos();
 
-                // 4. Collecter les donnees locales (post-merge) et sauvegarder
+                // 4. Collecter les donnees locales (post-merge) et sauvegarder.
+                // genAtCollect : releve AVANT la collecte ; toute saisie faite entre la collecte
+                // et la fin de l'ecriture (reseau lent compris) le fait bouger (cf. plus bas).
+                const genAtCollect = this._dirtyGen;
                 const data = await this._collectData();
                 data._meta.version = baseVersion + 1;
+
+                // GARDE-FOU « table vide » : ne jamais pousser une table vide par-dessus un
+                // fichier distant qui ne l'est pas (base locale videe par une erreur). Seule
+                // la suppression volontaire du dernier enregistrement (autoriserVidage) le
+                // permet, une fois.
+                const vides = this._MERGE_GUARD_STORES.filter(s => !data[s].length && (remoteData?.[s]?.length || 0) > 0);
+                if (vides.length && !this._vidageAutorise()) {
+                    const detail = vides.map(s => `${s} : 0 ici, ${remoteData[s].length} à distance`).join(' ; ');
+                    console.error('DataSync: sauvegarde refusee (table vide localement) —', detail);
+                    this._guardBlocked = true;   // _dirty conserve, rien n'est ecrit
+                    showToast('Sauvegarde annulée par sécurité : une table est vide sur cet appareil alors que SharePoint contient des données (' + this._escHtml(detail) + '). '
+                        + 'Rien n\'a été écrit. Prévenez l\'administrateur de l\'application.', 'danger', 30000);
+                    if (typeof ActivityLog !== 'undefined') ActivityLog.log('sauvegarde_bloquee_store_vide', { stores: vides.join(', '), detail });
+                    return;
+                }
 
                 // Verrouillage optimiste : If-Match sur l'ETag lu juste avant,
                 // ou If-None-Match: * si le fichier n'existait pas (creation only).
@@ -4148,21 +4448,39 @@ const DataSync = {
                 // Sauvegarde reussie
                 this._loadedMeta = data._meta;
                 this._lastSavedAt = data._meta.lastSaved;
-                this._dirty = false;
                 this._saveRetryCount = 0;
-                this._updateBadge(false);
+                // Autorisations a usage unique (volume, vidage) : rendues ici
+                this._mergeGuardBypassOnce = false;
+                this._mergeRequired = false;
+                try { localStorage.removeItem(this.VIDAGE_KEY); } catch { /* ignore */ }
                 await db.config.put({ id: '_syncMeta', value: data._meta });
-                // BUG #10 — modifs locales bien poussees : plus d'intention en attente.
-                await db.config.put({ id: '_dirtyFlag', value: false });
-                await this._captureSnapshot();
+                // Reference de fusion = EXACTEMENT les donnees poussees, pas une relecture de la
+                // base : une saisie faite pendant l'ecriture y entrerait sans avoir ete envoyee
+                // et serait ecrasee au prochain chargement distant.
+                await this._setSnapshot(data);
                 this._pendingRemoteData = null;
                 this._pendingNotified = false;
+                // BUG #10 — modifs locales bien poussees : plus d'intention en attente, SAUF si
+                // une saisie est survenue depuis la collecte. Dans ce cas le drapeau reste leve
+                // et une sauvegarde de suivi est planifiee (celle de markDirty est sortie sur
+                // « if (_saving) »). Pas d'await entre le test et la baisse du drapeau.
+                if (this._dirtyGen === genAtCollect) {
+                    this._dirty = false;
+                    this._updateBadge(false);
+                    await db.config.put({ id: '_dirtyFlag', value: false });
+                } else {
+                    clearTimeout(this._saveTimer);
+                    this._saveTimer = setTimeout(() => this.save(), VMC_CONFIG.SAVE_DEBOUNCE_MS);
+                }
                 if (typeof ActivityLog !== 'undefined') ActivityLog.log('sauvegarde', { version: data._meta.version, merged: remoteVersion > lastSyncedVersion });
                 if (opts.manual) showToast('Enregistré sur SharePoint', 'info');  // notif uniquement sur sauvegarde manuelle (pas a chaque auto-save 1.5s)
                 console.log(`DataSync: sauvegarde SharePoint OK (v${data._meta.version}, tentative ${attempt})`);
                 break;
             }
         } catch (e) {
+            // Garde-fou de volume : il a deja affiche et journalise son message ; ni message
+            // generique, ni reprise (l'anomalie ne se resout pas d'elle-meme). _dirty conserve.
+            if (e?.isMergeGuard) return;
             console.error('DataSync: erreur sauvegarde SharePoint', e);
             showToast('Erreur de sauvegarde SharePoint. Les données sont conservées localement.', 'warning');
             // BUG #9 — un echec d'ecriture reseau (non-412) ne doit pas abandonner
@@ -4191,6 +4509,8 @@ const DataSync = {
        ================================================================ */
     markDirty() {
         this._dirty = true;
+        this._dirtyGen++;             // detection d'une saisie pendant une ecriture (cf. save)
+        this._guardBlocked = false;   // nouvelle saisie : nouvelle tentative apres un refus de garde-fou
         this._updateBadge(true);
         // BUG #10 — persister l'intention de sauvegarde pour survivre a un reload :
         // si l'app redemarre avant le flush, le boot saura qu'il y a des modifs locales
@@ -4254,6 +4574,13 @@ const DataSync = {
                 await this.save();
             }
             this.registerPresence();
+            // Les donnees viennent d'etre chargees ou fusionnees : rafraichir les droits
+            // d'administration et la page affichee (sinon elle reste sur la base d'avant la
+            // connexion jusqu'au prochain changement d'onglet). Jamais pendant une saisie.
+            try {
+                await this.applyAdminUI();
+                if (!this._isUserEditing() && typeof App !== 'undefined' && App.route) App.route();
+            } catch (e) { console.warn('DataSync: rafraichissement apres connexion', e); }
             showToast('Connecté à SharePoint — ' + (_msalAccount.name || 'utilisateur'));
             if (typeof ActivityLog !== 'undefined') ActivityLog.log('connexion', { compte: _msalAccount.name || '' });
             return true;
@@ -10287,9 +10614,9 @@ const RemarquesPage = {
    ============================================================= */
 
 /* ---------- Toast helper ---------- */
-function showToast(message, type = 'success') {
+function showToast(message, type = 'success', delay = 3500) {   // delay : messages longs des garde-fous
     const container = document.getElementById('toast-container');
-    const id = 'toast-' + Date.now();
+    const id = 'toast-' + Date.now() + '-' + (showToast._n = (showToast._n || 0) + 1);   // deux toasts dans la meme milliseconde
     container.insertAdjacentHTML('beforeend', `
         <div id="${id}" class="toast align-items-center text-bg-${type}" role="alert" aria-live="assertive">
             <div class="d-flex">
@@ -10298,7 +10625,7 @@ function showToast(message, type = 'success') {
             </div>
         </div>`);
     const toastEl = document.getElementById(id);
-    const toast = new bootstrap.Toast(toastEl, { delay: 3500 });
+    const toast = new bootstrap.Toast(toastEl, { delay });
     toast.show();
     toastEl.addEventListener('hidden.bs.toast', () => toastEl.remove());
 }
@@ -10515,8 +10842,10 @@ document.addEventListener('DOMContentLoaded', () => {
             await App._initSyncUI();
             DataSync.setupBeforeUnload();
             DataSync.startPolling();
-            // Capturer le snapshot initial si pas encore fait (offline, premier run, etc.)
-            if (!DataSync._loadedSnapshot) await DataSync._captureSnapshot();
+            // Capturer le snapshot initial si pas encore fait (offline, premier run, etc.) — jamais
+            // a partir d'une base modifiee non synchronisee : ses saisies en attente
+            // deviendraient « deja synchronisees » et seraient supprimees a la fusion suivante.
+            if (!DataSync._loadedSnapshot && !DataSync._dirty) await DataSync._captureSnapshot();
 
             // Guide de premiere connexion
             if (DataSync.isFirstLaunch()) {
