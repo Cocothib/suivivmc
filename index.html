@@ -8659,6 +8659,11 @@ const VmcListPage = {
                             ${grilleTypes.map(gt => `<option value="${gt.id}">${this._escHtml(gt.label)}</option>`).join('')}
                         </select>
                     </div>
+                    <div class="col-12 col-md">
+                        <label class="form-label small mb-0">Recherche</label>
+                        <input type="search" class="form-control form-control-sm" id="fl-search" autocomplete="off"
+                               placeholder="Site, client, n° OPP, observateur, personne observée, observations…">
+                    </div>
                 </div>
             </div>
         </div>
@@ -8684,6 +8689,22 @@ const VmcListPage = {
         ['fl-cond', 'fl-agence', 'fl-type'].forEach(id => {
             document.getElementById(id).onchange = () => this._applyFilters();
         });
+        const search = document.getElementById('fl-search');
+        let timer = null;
+        search.oninput = () => { clearTimeout(timer); timer = setTimeout(() => this._applyFilters(), 150); };
+        search.onsearch = () => this._applyFilters();
+    },
+
+    // Recherche libre : accents et casse ignores, tous les mots doivent etre presents
+    _norm(s) {
+        return (s || '').toString().normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+    },
+    _searchText(v) {
+        const cond = this._condMap[v.conducteurId];
+        return this._norm([v.site, v.conducteurNom, cond?.nom, cond?.agence, v.observeNom, v.type, v.date,
+            v.observations, v.pointsAmelioration, v.bonnesPratiques,
+            ...(v.grille || []).map(g => g.commentaire),
+            ...(v.actionsVmc || []).map(a => [a.description, a.responsable].join(' '))].join(' | '));
     },
 
     async _applyFilters() {
@@ -8700,6 +8721,10 @@ const VmcListPage = {
                 const c = this._condMap[v.conducteurId];
                 return c && c.agence === agence;
             });
+        }
+        const words = this._norm(document.getElementById('fl-search')?.value).split(/\s+/).filter(Boolean);
+        if (words.length) {
+            vmcs = vmcs.filter(v => { const t = this._searchText(v); return words.every(w => t.includes(w)); });
         }
         this._renderList(vmcs);
     },
